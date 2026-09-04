@@ -7,19 +7,15 @@ using UnityEngine.AI;
 
 namespace MCPBridge
 {
-    // Offline pack — เครื่องมือสำหรับเกม single-player/offline:
-    //   ScriptableObject (อ่าน/แก้ config/balance/data), scene spatial query (raycast/overlap/navmesh),
-    //   console_alert (ดัก log ตาม pattern)
     public static partial class MCPHandlers
     {
-        // ── ScriptableObject: อ่านค่า ──────────────────────────────────────
         static string ReadScriptableObject(string body)
         {
             var data = ParseReq<SoRequest>(body);
             return ExecuteOnMainThread(() =>
             {
                 var so = ResolveScriptableObject(data.path, data.name, out string path);
-                if (so == null) return $"{{\"error\":\"ไม่พบ ScriptableObject: {EscapeJson(data.path ?? data.name)}\"}}";
+                if (so == null) return $"{{\"error\":\"ScriptableObject not found: {EscapeJson(data.path ?? data.name)}\"}}";
 
                 var sob = new SerializedObject(so);
                 var prop = sob.GetIterator();
@@ -40,7 +36,6 @@ namespace MCPBridge
             });
         }
 
-        // ── ScriptableObject: แก้ค่า (config/balance/data) ─────────────────
         static string EditScriptableObject(string body)
         {
             var data = ParseReq<SoEditRequest>(body);
@@ -48,13 +43,13 @@ namespace MCPBridge
             {
                 if (string.IsNullOrEmpty(data.property)) return "{\"error\":\"property required\"}";
                 var so = ResolveScriptableObject(data.path, data.name, out string path);
-                if (so == null) return $"{{\"error\":\"ไม่พบ ScriptableObject: {EscapeJson(data.path ?? data.name)}\"}}";
+                if (so == null) return $"{{\"error\":\"ScriptableObject not found: {EscapeJson(data.path ?? data.name)}\"}}";
 
                 var sob = new SerializedObject(so);
                 var prop = sob.FindProperty(data.property) ?? FindByDisplayName(sob, data.property);
                 if (prop == null) return $"{{\"error\":\"property not found: {EscapeJson(data.property)}\"}}";
 
-                Undo.RecordObject(so, "MCP EditScriptableObject");
+                Undo.RecordObject(so, "AI Unity MCP Server Edit ScriptableObject");
                 if (!ApplyValue(prop, data.value)) return $"{{\"error\":\"unsupported property type for '{EscapeJson(data.property)}'\"}}";
                 sob.ApplyModifiedProperties();
                 EditorUtility.SetDirty(so);
@@ -82,7 +77,6 @@ namespace MCPBridge
             return null;
         }
 
-        // ── Raycast — ยิง ray หา collider (debug combat/targeting) ─────────
         static string RaycastQuery(string body)
         {
             var data = ParseReq<RaycastRequest>(body);
@@ -94,7 +88,7 @@ namespace MCPBridge
                 {
                     var target = new Vector3(data.tx, data.ty, data.tz);
                     dir = target - origin;
-                    if (dir.sqrMagnitude < 1e-6f) return "{\"error\":\"ต้องระบุ direction (dx,dy,dz) หรือ target (tx,ty,tz) ที่ต่างจาก origin\"}";
+                    if (dir.sqrMagnitude < 1e-6f) return "{\"error\":\"Provide direction (dx,dy,dz) or a target (tx,ty,tz) different from the origin.\"}";
                 }
                 dir.Normalize();
                 float maxDist = data.maxDistance > 0 ? data.maxDistance : 1000f;
@@ -127,7 +121,6 @@ namespace MCPBridge
                    $"\"normal\":[{h.normal.x:0.##},{h.normal.y:0.##},{h.normal.z:0.##}]}}";
         }
 
-        // ── Overlap — หา collider ในรัศมี ─────────────────────────────────
         static string OverlapQuery(string body)
         {
             var data = ParseReq<OverlapRequest>(body);
@@ -149,7 +142,6 @@ namespace MCPBridge
             });
         }
 
-        // ── NavMesh path — คำนวณเส้นทาง 2 จุด (debug AI เดินไม่ถึง) ─────────
         static string NavMeshPath(string body)
         {
             var data = ParseReq<NavPathRequest>(body);
@@ -175,12 +167,11 @@ namespace MCPBridge
                 }
                 sb.Append("]");
                 if (path.status != NavMeshPathStatus.PathComplete)
-                    sb.Append(",\"note\":\"Partial/Invalid = ไปไม่ถึง (จุดอยู่นอก NavMesh, ขาดช่วง, หรือ area ถูกปิด) — เช็ค bake + off-mesh link\"");
+                    sb.Append(",\"note\":\"Partial or Invalid means unreachable: a point may be outside the NavMesh, the mesh may be disconnected, or an area may be disabled. Check baking and off-mesh links.\"");
                 return sb.Append("}").ToString();
             });
         }
 
-        // comma-separated layer names → mask (ว่าง = ทุก layer)
         static int ParseLayerMask(string layers)
         {
             if (string.IsNullOrEmpty(layers)) return ~0;
@@ -193,7 +184,6 @@ namespace MCPBridge
             return mask == 0 ? ~0 : mask;
         }
 
-        // ── console_alert — ดัก Debug.Log ตาม pattern ────────────────────
         static string ConsoleAlertAdd(string body)
         {
             var data = ParseReq<ConsoleAlertRequest>(body);
@@ -201,7 +191,7 @@ namespace MCPBridge
             string err = ConsoleAlert.Add(data.pattern, data.level);
             if (err != null) return $"{{\"error\":\"{EscapeJson(err)}\"}}";
             return $"{{\"watching\":\"{EscapeJson(data.pattern)}\",\"level\":\"{EscapeJson(string.IsNullOrEmpty(data.level) ? "all" : data.level)}\"," +
-                   "\"note\":\"จะนับ+เก็บ log ที่ตรง pattern ตอน Play — ดูผล console_alert_get\"}";
+                   "\"note\":\"Counts and stores Play Mode logs matching the pattern. Read results with console_alert_get.\"}";
         }
 
         // ── Request models ────────────────────────────────────────────────

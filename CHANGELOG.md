@@ -5,30 +5,48 @@ All notable changes to this package are documented here.
 ## [Unreleased]
 
 ### Fixed
+- Asset Import Workers and batch-mode Unity processes no longer initialize the listener or register a
+  duplicate `Main` presence. The bridge re-runs discovery on every safe retry and tracks the stable
+  instance ID rather than a port that can change after a domain reload.
+- The C# command alias loader now resolves the shared manifest from this package's real
+  `Server~/commands.json` path instead of an extracted-project path.
 - **`.mcp.json` no longer gets stamped with a stale path on every domain reload.**
-  `MCPServer.EnsureMcpJson()` hardcoded `./Tools/unity-mcp-server/index.js` (a path from the project
-  this package was extracted from) and rewrote the file whenever its contents differed, so a config
+  `MCPServer.EnsureMcpJson()` hardcoded a source-project-relative server path and rewrote the file
+  whenever its contents differed, so a config
   edited by hand was clobbered on the next recompile. It now resolves this package's real location
   through `UnityEditor.PackageManager.PackageInfo.FindForAssembly` and writes the actual path to
   `Server~/index.js` — project-relative when the package sits inside the Unity project, absolute for a
   local `file:` reference. The file is only written when it is missing or when it contains nothing but
   this package's own entry (which is how a stale path is repaired); **a `.mcp.json` with other MCP
-  servers or extra keys is left untouched**, with one Console warning per session if its `unity` entry
+  servers or extra keys is left untouched**, with one Console warning per session if its
+  `AIUnityMCPServer` entry
   points at a file that does not exist. Immutable installs (git URL / registry, living in
-  `Library/PackageCache`) are skipped entirely, since that path is read-only and changes on every
-  update. The write also moved to `EditorApplication.delayCall`, so it no longer runs before the
+  `Library/PackageCache`) are skipped until Setup has bootstrapped a stable per-user runtime cache;
+  the generated file then points at that cache. The write also moved to `EditorApplication.delayCall`, so it no longer runs before the
   Package Manager and AssetDatabase are ready. Both rules — where the path points and which files may
   be rewritten — are covered by new EditMode tests in `Tests/Editor/McpJsonPathTests.cs`.
 - **The Node bridge finds the Editor for every documented install method.** `Server~/index.js`
   derived the Unity project root as *two directories above itself* — true only for the original
-  project's `Tools/unity-mcp-server/` layout, so instance discovery resolved to `<project>/Packages/`
+  extracted layout, so instance discovery resolved to `<project>/Packages/`
   (embedded) or to a folder outside the project entirely (`file:` reference), and `unity_*` tools
   reported "no Unity instance" unless `UNITY_MCP_PORT` was set by hand. Every Editor now also
-  registers itself in a machine-wide registry at `~/.mcpbridge/instances/` alongside the existing
-  per-project `Library/DeltaMCP/instances/`, and the bridge merges both by PID. Discovery logic moved
+  registers itself in a machine-wide registry at `~/.AIUnityMCPServer/instances/` alongside the
+  per-project `Library/AIUnityMCPServer/instances/`, and the bridge merges both by PID. Discovery logic moved
   to a new `Server~/registry.js` (importable and testable on its own).
 
 ### Added
+- **Self-healing Codex connection flow.** `unity_connection_status` diagnoses discovery without side
+  effects, while `unity_connect` deterministically selects an Editor, starts it read-only when needed,
+  follows port changes and verifies `ping` in one call. Ambiguous cross-project targets now return
+  `AMBIGUOUS` with exact candidates instead of picking the first matching label.
+- **One-click Codex Setup and read-only Doctor.** Unity now registers the bridge with the official
+  `codex mcp` CLI. Git/registry and editable installs atomically bootstrap a content-addressed bridge
+  under the per-user application-data directory, so npm dependencies never modify `PackageCache` and
+  the registered entry survives package path changes. Repeated Setup calls reuse a validated cache;
+  Doctor separates source, bootstrap and dependency failures. Existing custom `AIUnityMCPServer` registrations
+  remain untouched without explicit Repair. Auto Start Read-Only is opt-in and never enables writes.
+- **Versioned Editor presence.** Atomic schema-v2 presence files include a stable project instance ID,
+  process kind, package version and heartbeat so the Node bridge can reject stale or worker entries.
 - **Offline pack** — tools aimed at single-player/offline work (`Editor/MCPHandlers.Offline.cs`,
   `Editor/ConsoleAlert.cs`):
   - `read_scriptableobject` / `edit_scriptableobject` (`/asset/so-read`, `/asset/so-edit`) — read and
@@ -138,8 +156,7 @@ All notable changes to this package are documented here.
 ## [1.0.0] - 2026-06-28
 
 ### Added
-- Initial extraction of the MCP Bridge system from the `delta-unity` project into a
-  standalone, reusable UPM package.
+- Initial extraction of AI Unity MCP Server into a standalone, reusable UPM package.
 - Editor assembly `MCPBridge.Editor` (27 scripts) — chat window, MCP server, handlers, profiler
   readers, code/prefab indexers, refactor audit, runtime watch, exception tracker.
 - Node bridge under `Server~/` for external Claude Code CLI integration.

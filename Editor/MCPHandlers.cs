@@ -13,23 +13,18 @@ namespace MCPBridge
 {
     public static partial class MCPHandlers
     {
-        // ── ความปลอดภัย: read-only default + rate limit ──
-        // เปิด/ปิด write ผ่านเมนู MCP Bridge/Allow Write Commands (เก็บใน EditorPrefs)
-        // thread-safe: Dispatch ถูกเรียกจาก background (HTTP server / Task.Run) ด้วย
-        // → EditorPrefs.GetBool เรียกได้เฉพาะ main thread → cache ค่าไว้ อ่าน background ใช้ cache
         static bool _allowWritesCache;
         public static bool AllowWrites
         {
             get
             {
                 if (System.Threading.Thread.CurrentThread.ManagedThreadId == _mainThreadId)
-                    _allowWritesCache = EditorPrefs.GetBool("DeltaMCP_AllowWrites", false);   // refresh สดบน main thread
-                return _allowWritesCache;                                                      // background ใช้ค่าล่าสุด
+                    _allowWritesCache = EditorPrefs.GetBool("AIUnityMCPServer_AllowWrites", false);
+                return _allowWritesCache;
             }
-            set { EditorPrefs.SetBool("DeltaMCP_AllowWrites", value); _allowWritesCache = value; }
+            set { EditorPrefs.SetBool("AIUnityMCPServer_AllowWrites", value); _allowWritesCache = value; }
         }
 
-        // คำสั่งที่ "แก้ไข state" ของโปรเจกต์/scene — ถูกบล็อกถ้า read-only
         static readonly HashSet<string> WritePaths = new HashSet<string>
         {
             "/object/add-component", "/object/set-property", "/object/set-transform",
@@ -39,18 +34,12 @@ namespace MCPBridge
             "/terrain/set-heights", "/script/create", "/ui/optimize",
             "/material/create", "/atlas/create",
             "/diagnose/exceptions-clear", "/code/run",
-            // Apply/Edit Pack — แก้ของจริง (write-gated)
             "/script/edit", "/object/assign-reference", "/batch",
             "/asset/delete", "/asset/import-settings", "/build/player",
-            "/asset/so-edit",   // แก้ค่าใน ScriptableObject asset
-            "/tests/run",   // เริ่มรันเทสต์ = action (playmode เข้าจริง) — /tests/results เป็น read-only
-            // หมายเหตุ: /watch/add, /watch/clear = READ-ONLY (แค่ sample ค่า field ไม่แก้ scene/game)
-            //   → ไม่อยู่ใน WritePaths เพื่อให้ดู runtime value ได้โดยไม่ต้องเปิด Allow Write
+            "/asset/so-edit",
+            "/tests/run",
         };
 
-        // ── command-name → canonical path : SINGLE SOURCE ของการ map ชื่อ→path ──
-        //   ⚠️ เพิ่ม handler ใหม่ใน Dispatch switch (ด้านล่าง) → เพิ่ม alias ตรงนี้ด้วย (ไฟล์เดียวกัน กัน drift)
-        //   ใช้ร่วมกัน: ช่องแชต (CommandJsonToPath → ResolvePath) + Dispatch (normalize หัวฟังก์ชัน)
         static readonly Dictionary<string, string> CmdAlias = BuildCmdAlias();
 
         [Serializable] class CmdManifest { public CmdEntry[] commands; }
@@ -58,7 +47,6 @@ namespace MCPBridge
 
         static Dictionary<string, string> BuildCmdAlias()
         {
-            // baseline — safety floor: ถ้าโหลด commands.json ไม่ได้ ยังใช้ชุดนี้ได้ (ไม่แย่กว่าเดิม)
             var d = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             {
                 { "create_script", "/script/create" },       { "create_prefab", "/prefab/create" },
@@ -102,10 +90,9 @@ namespace MCPBridge
                 { "build_player", "/build/player" },            { "git_status", "/git/status" },
                 { "run_tests", "/tests/run" },                  { "get_test_results", "/tests/results" },
             };
-            // overlay จาก commands.json (SINGLE SOURCE ร่วมกับ bridge) — JSON ชนะ baseline
             try
             {
-                string p = Path.GetFullPath(Path.Combine(Application.dataPath, "..", "Tools", "unity-mcp-server", "commands.json"));
+                string p = MCPPackagePaths.CommandManifestPath();
                 if (File.Exists(p))
                 {
                     var m = JsonUtility.FromJson<CmdManifest>(File.ReadAllText(p));
@@ -115,11 +102,10 @@ namespace MCPBridge
                                 d[e.command] = e.path;
                 }
             }
-            catch (Exception ex) { Debug.LogWarning($"[MCP] โหลด commands.json ไม่ได้ → ใช้ baseline: {ex.Message}"); }
+            catch (Exception ex) { Debug.LogWarning($"[AI Unity MCP Server] Could not load commands.json; using the baseline set: {ex.Message}"); }
             return d;
         }
 
-        // รายการ path ทั้งหมด (distinct + เรียง) — ใช้โดย health check "ทดสอบ" ในหน้าต่างแชต
         public static List<string> CommandPaths()
         {
             var set = new HashSet<string>(CmdAlias.Values);
@@ -128,7 +114,6 @@ namespace MCPBridge
             return list;
         }
 
-        // รับได้ทั้ง command-name ("scene_hierarchy") และ path ตรง ("/scene/hierarchy")
         public static string ResolvePath(string cmdOrPath)
         {
             if (string.IsNullOrEmpty(cmdOrPath)) return "/unknown";
@@ -136,11 +121,10 @@ namespace MCPBridge
             return CmdAlias.TryGetValue(cmdOrPath, out var p) ? p : "/" + cmdOrPath;
         }
 
-        const int RATE_MAX_PER_SEC = 25;   // เพดานคำสั่ง/วินาที — กัน agent วนรัว (เคส workflow เปิดทุก scene)
+        const int RATE_MAX_PER_SEC = 25;
         static readonly object _rlLock = new object();
         static readonly Queue<DateTime> _recent = new Queue<DateTime>();
 
-        // ── MCP Command Log — แสดงใน "Claude In" tab + persist ใน Library/DeltaMCP/ ──
         [Serializable]
         public class MCPLogEntry
         {
@@ -150,7 +134,7 @@ namespace MCPBridge
             public string Response;
             public long   Ms;
             public bool   IsError;
-            [System.NonSerialized] public bool Expanded;   // UI state ไม่ save
+            [System.NonSerialized] public bool Expanded;
         }
 
         [Serializable] class MCPLogWrap { public List<MCPLogEntry> items; }
@@ -160,7 +144,7 @@ namespace MCPBridge
 
         static string LogFilePath()
         {
-            string dir = System.IO.Path.Combine(Application.dataPath, "..", "Library", "DeltaMCP");
+            string dir = System.IO.Path.Combine(Application.dataPath, "..", "Library", "AIUnityMCPServer");
             System.IO.Directory.CreateDirectory(dir);
             return System.IO.Path.Combine(dir, "mcp_log.json");
         }
@@ -174,7 +158,10 @@ namespace MCPBridge
                 System.IO.File.WriteAllText(LogFilePath(),
                     JsonUtility.ToJson(new MCPLogWrap { items = snap }));
             }
-            catch { }
+            catch (Exception exception)
+            {
+                Debug.LogWarning($"[AI Unity MCP Server] Save command log failed: {exception.Message}");
+            }
         }
 
         public static void LoadLog()
@@ -187,7 +174,10 @@ namespace MCPBridge
                 if (wrap?.items == null) return;
                 lock (Log) { Log.Clear(); Log.AddRange(wrap.items); }
             }
-            catch { }
+            catch (Exception exception)
+            {
+                Debug.LogWarning($"[AI Unity MCP Server] Load command log failed: {exception.Message}");
+            }
         }
 
         public static void ClearLog()
@@ -227,13 +217,10 @@ namespace MCPBridge
         public static Func<string, string> RunTestsHandler;
         public static Func<string, string> GetTestResultsHandler;
 
-        // rateLimited=false → ข้าม rate-limit (ใช้โดย run_batch ที่นับเป็น 1 action ของผู้ใช้
-        //   แต่ยิง sub-command หลายตัวรวดเดียว — ยังผ่าน write-guard ปกติทุกตัว)
         public static string Dispatch(string path, string body, bool rateLimited = true)
         {
-            path = ResolvePath(path);   // normalize: รับ command-name ("scene_hierarchy") หรือ path ตรง
+            path = ResolvePath(path);
 
-            // 1) rate limit — บล็อกถ้ายิงเกิน N คำสั่งใน 1 วินาที
             if (rateLimited)
             lock (_rlLock)
             {
@@ -241,17 +228,16 @@ namespace MCPBridge
                 while (_recent.Count > 0 && (now - _recent.Peek()).TotalSeconds > 1.0) _recent.Dequeue();
                 if (_recent.Count >= RATE_MAX_PER_SEC)
                 {
-                    var rl = "{\"error\":\"rate limit: คำสั่งถี่เกิน (>25/วินาที) ถูกบล็อก — กัน agent/workflow วนรัว\"}";
+                    var rl = "{\"error\":\"Rate limit exceeded: more than 25 commands per second were blocked to prevent a runaway workflow.\"}";
                     AppendLog(path, body, rl, 0);
                     return rl;
                 }
                 _recent.Enqueue(now);
             }
 
-            // 2) read-only guard — คำสั่งที่แก้ state ต้องเปิด Allow Write ก่อน
             if (WritePaths.Contains(path) && !AllowWrites)
             {
-                var ro = $"{{\"error\":\"READ-ONLY mode: คำสั่ง '{path}' ถูกบล็อก. เปิดเมนู MCP Bridge/Allow Write Commands ก่อนถึงจะแก้ scene/asset ได้\"}}";
+                var ro = $"{{\"error\":\"READ-ONLY mode blocked '{path}'. Enable AI Unity MCP Server/Allow Write Commands before modifying scenes or assets.\"}}";
                 AppendLog(path, body, ro, 0);
                 return ro;
             }
@@ -260,7 +246,6 @@ namespace MCPBridge
             string _result = path switch
             {
                 "/ping"              => Ping(),
-                // ── Core Assist Pack (อ่าน + แก้ไขของที่มีอยู่) ──
                 "/console/read"      => ReadConsole(body),
                 "/object/inspect"    => InspectObject(body),
                 "/object/add-component" => AddComponent(body),
@@ -324,7 +309,6 @@ namespace MCPBridge
                 "/watch/clear" => ExecuteOnMainThread(() => { RuntimeWatch.ClearAll(); return "{\"cleared\":true}"; }),
                 "/code/refactor-audit" => RefactorAuditCmd(body),
                 "/code/run"          => RunCsharp(body),
-                // ── Apply/Edit Pack (ลงมือแก้ของจริง) ──
                 "/script/edit"             => EditScript(body),
                 "/object/assign-reference" => AssignReference(body),
                 "/batch"                   => RunBatch(body),
@@ -334,9 +318,9 @@ namespace MCPBridge
                 "/build/player"            => BuildPlayer(body),
                 "/git/status"              => GitStatus(body),
                 "/tests/run"               => RunTestsHandler != null ? ExecuteOnMainThread(() => RunTestsHandler(body))
-                                              : "{\"error\":\"Test Runner ไม่พร้อม — ติดตั้ง package com.unity.test-framework ก่อน (assembly MCPBridge.Editor.TestRunner จะโหลดเอง)\"}",
+                                              : "{\"error\":\"Test Runner is unavailable. Install com.unity.test-framework; MCPBridge.Editor.TestRunner will load automatically.\"}",
                 "/tests/results"           => GetTestResultsHandler != null ? ExecuteOnMainThread(() => GetTestResultsHandler(body))
-                                              : "{\"error\":\"Test Runner ไม่พร้อม — ติดตั้ง package com.unity.test-framework ก่อน\"}",
+                                              : "{\"error\":\"Test Runner is unavailable. Install com.unity.test-framework.\"}",
                 _ => $"{{\"error\":\"Unknown command: {path}\"}}"
             };
             _sw.Stop();
@@ -366,8 +350,6 @@ namespace MCPBridge
         }
 
         // ── Scene ───────────────────────────────────────────────────────────
-        // ทุก handler ที่แตะ Unity API ต้อง wrap ExecuteOnMainThread
-        // เพราะถูกเรียกจาก HTTP listener thread (background) ซึ่งเรียก Unity API ตรงๆ ไม่ได้
         static string SceneList() => ExecuteOnMainThread(() =>
         {
             var scenes = new System.Text.StringBuilder("[");
@@ -383,7 +365,7 @@ namespace MCPBridge
 
         static string SceneHierarchy() => ExecuteOnMainThread(() =>
         {
-            int budget = 2000;   // จำกัดจำนวน node — กัน scene ใหญ่ serialize จน payload บวม/ช้า
+            int budget = 2000;
             var sb = new System.Text.StringBuilder("[");
             bool first = true;
             foreach (GameObject go in UnityEngine.SceneManagement.SceneManager.GetActiveScene().GetRootGameObjects())
@@ -397,8 +379,6 @@ namespace MCPBridge
             return $"{{\"hierarchy\":{sb},\"truncated\":{(budget <= 0 ? "true" : "false")}}}";
         });
 
-        // นับจำนวน component ตามชื่อ type ใน scene (รวม inactive)
-        // เช่น Fusion.NetworkObject, NetworkBehaviour, Rigidbody, ฯลฯ
         static string CountComponents(string body)
         {
             var data = ParseReq<CountRequest>(body);
@@ -407,7 +387,6 @@ namespace MCPBridge
                 if (string.IsNullOrEmpty(data.type))
                     return "{\"error\":\"type required (e.g. Fusion.NetworkObject, Rigidbody)\"}";
 
-                // หา Type จากชื่อ (ลองทั้งชื่อเต็มและ short name ทุก assembly)
                 Type t = FindComponentType(data.type);
                 if (t == null)
                     return $"{{\"error\":\"type not found: {EscapeJson(data.type)}\"}}";
@@ -417,7 +396,6 @@ namespace MCPBridge
                     .Where(c => c.gameObject.scene.IsValid() && !EditorUtility.IsPersistent(c.gameObject))
                     .ToList();
 
-                // แยก active (ใช้งานอยู่) vs inactive (อยู่ใน pool / SetActive false)
                 int active = 0, inactive = 0, enabledCount = 0;
                 var activeNames = new List<string>();
                 var inactiveNames = new List<string>();
@@ -427,7 +405,6 @@ namespace MCPBridge
                     if (goActive) { active++; if (activeNames.Count < 50) activeNames.Add(c.gameObject.name); }
                     else          { inactive++; if (inactiveNames.Count < 50) inactiveNames.Add(c.gameObject.name); }
 
-                    // component ที่ enable อยู่ด้วย (Behaviour) — active จริงทั้ง GO + component
                     if (goActive && (!(c is Behaviour b) || b.enabled)) enabledCount++;
                 }
 
@@ -471,7 +448,7 @@ namespace MCPBridge
 
         static string GameObjectJson(GameObject go, int depth, ref int budget)
         {
-            budget--;   // นับ node ที่ใช้ไป (กันบวม)
+            budget--;
             var sb = new System.Text.StringBuilder();
             sb.Append($"{{\"name\":\"{EscapeJson(go.name)}\",\"active\":{go.activeSelf.ToString().ToLower()},\"children\":[");
             if (depth < 4 && budget > 0)
@@ -508,7 +485,7 @@ namespace MCPBridge
                 }
 
                 go.transform.localPosition = new Vector3(data.x, data.y, data.z);
-                Undo.RegisterCreatedObjectUndo(go, $"MCP Create {go.name}");
+                Undo.RegisterCreatedObjectUndo(go, $"AI Unity MCP Server Create {go.name}");
                 return $"{{\"created\":\"{EscapeJson(go.name)}\",\"instanceId\":{GetResponseInstanceId(go)}}}";
             });
         }
@@ -566,12 +543,11 @@ namespace MCPBridge
 
                 var instance = (GameObject)PrefabUtility.InstantiatePrefab(prefabAsset);
                 instance.transform.position = new Vector3(data.x, data.y, data.z);
-                Undo.RegisterCreatedObjectUndo(instance, $"MCP Place {instance.name}");
+                Undo.RegisterCreatedObjectUndo(instance, $"AI Unity MCP Server Place {instance.name}");
                 return $"{{\"placed\":\"{EscapeJson(instance.name)}\",\"path\":\"{EscapeJson(prefabPath)}\",\"instanceId\":{GetResponseInstanceId(instance)}}}";
             });
         }
 
-        // ── Create Terrain — สร้าง Terrain ใหม่ + gen เนินด้วย Perlin ─────────
         static string CreateTerrain(string body)
         {
             var data = ParseReq<CreateTerrainRequest>(body);
@@ -585,7 +561,6 @@ namespace MCPBridge
                 var td = new TerrainData { heightmapResolution = 513 };
                 td.size = new Vector3(width, height, length);
 
-                // gen เนินด้วย Perlin noise (ถ้า generate = true หรือ scale > 0)
                 if (data.generate || data.scale > 0)
                 {
                     float scale = data.scale > 0 ? data.scale : 0.01f;
@@ -597,14 +572,13 @@ namespace MCPBridge
                     td.SetHeights(0, 0, heights);
                 }
 
-                // เซฟ TerrainData เป็น asset (Terrain ต้องมี data ที่ persist)
                 EnsureFolder("Assets/TerrainData");
                 string tdPath = AssetDatabase.GenerateUniqueAssetPath($"Assets/TerrainData/{name}.asset");
                 AssetDatabase.CreateAsset(td, tdPath);
 
                 var go = Terrain.CreateTerrainGameObject(td);
                 go.name = name;
-                Undo.RegisterCreatedObjectUndo(go, $"MCP Create Terrain {name}");
+                Undo.RegisterCreatedObjectUndo(go, $"AI Unity MCP Server Create Terrain {name}");
                 AssetDatabase.SaveAssets();
                 return $"{{\"terrain\":\"{EscapeJson(name)}\",\"data\":\"{EscapeJson(tdPath)}\",\"size\":[{width},{height},{length}]}}";
             });
@@ -625,7 +599,7 @@ namespace MCPBridge
                     canvas.renderMode = RenderMode.ScreenSpaceOverlay;
                     canvasGO.AddComponent<CanvasScaler>();
                     canvasGO.AddComponent<GraphicRaycaster>();
-                    Undo.RegisterCreatedObjectUndo(canvasGO, "MCP Create Canvas");
+                    Undo.RegisterCreatedObjectUndo(canvasGO, "AI Unity MCP Server Create Canvas");
                 }
 
                 GameObject uiGO = data.type switch
@@ -644,7 +618,7 @@ namespace MCPBridge
                     if (data.width > 0)  rt.sizeDelta = new Vector2(data.width, data.height);
                 }
 
-                Undo.RegisterCreatedObjectUndo(uiGO, $"MCP Create UI {data.name}");
+                Undo.RegisterCreatedObjectUndo(uiGO, $"AI Unity MCP Server Create UI {data.name}");
                 return $"{{\"ui\":\"{EscapeJson(uiGO.name)}\",\"type\":\"{data.type}\"}}";
             });
         }
@@ -814,7 +788,7 @@ public class {className} : MonoBehaviour
                 {
                     if (img.GetComponent<Button>() == null && img.GetComponent<Toggle>() == null && img.raycastTarget)
                     {
-                        Undo.RecordObject(img, "MCP OptimizeUI");
+                        Undo.RecordObject(img, "AI Unity MCP Server Optimize UI");
                         img.raycastTarget = false;
                         fixes++;
                     }
@@ -823,7 +797,7 @@ public class {className} : MonoBehaviour
                 {
                     if (txt.raycastTarget)
                     {
-                        Undo.RecordObject(txt, "MCP OptimizeUI");
+                        Undo.RecordObject(txt, "AI Unity MCP Server Optimize UI");
                         txt.raycastTarget = false;
                         fixes++;
                     }
@@ -834,7 +808,7 @@ public class {className} : MonoBehaviour
                 {
                     if (canvas.pixelPerfect)
                     {
-                        Undo.RecordObject(canvas, "MCP OptimizeUI");
+                        Undo.RecordObject(canvas, "AI Unity MCP Server Optimize UI");
                         canvas.pixelPerfect = false;
                         report.Append("Disabled pixelPerfect on " + canvas.name + ". ");
                         fixes++;
@@ -890,7 +864,6 @@ public class {className} : MonoBehaviour
             });
         }
 
-        // ── Create Sprite Atlas (รวม 2D ลด draw call) ──────────────────────
         static string CreateSpriteAtlas(string body)
         {
             var data = ParseReq<CreateAtlasRequest>(body);
@@ -901,7 +874,6 @@ public class {className} : MonoBehaviour
                 string path = AssetDatabase.GenerateUniqueAssetPath($"Assets/Atlases/{data.name}.spriteatlas");
 
                 var atlas = new SpriteAtlasAsset();
-                // หา sprite/texture ในโฟลเดอร์ที่ระบุ
                 var guids = AssetDatabase.FindAssets("t:Sprite", new[] { folder });
                 var objs = new List<UnityEngine.Object>();
                 foreach (var g in guids)
@@ -919,7 +891,6 @@ public class {className} : MonoBehaviour
             });
         }
 
-        // ── Audit: textures ที่ควร optimize ────────────────────────────────
         static string AuditTextures()
         {
             return ExecuteOnMainThread(() =>
@@ -941,14 +912,14 @@ public class {className} : MonoBehaviour
                     if (imp.mipmapEnabled && imp.textureType == TextureImporterType.Sprite) reasons.Add("mipmap on sprite (waste)");
                     if (imp.isReadable) reasons.Add("read/write enabled (2x memory)");
                     if (imp.anisoLevel > 4 && imp.textureType == TextureImporterType.Default)
-                        reasons.Add($"aniso={imp.anisoLevel} (>4 แพง — ใช้เฉพาะ floor/road)");
+                        reasons.Add($"aniso={imp.anisoLevel} (>4 is expensive; reserve it for surfaces such as floors and roads)");
                     if (!imp.mipmapEnabled && imp.textureType == TextureImporterType.Default && imp.maxTextureSize >= 512)
-                        reasons.Add("mipmap disabled on 3D texture (≥512px) — เปิด mipmap ลด aliasing + GPU cache miss");
+                        reasons.Add("mipmaps disabled on a 3D texture (≥512px); enable mipmaps to reduce aliasing and GPU cache misses");
                     var tex2d = AssetDatabase.LoadAssetAtPath<Texture2D>(path);
                     if (tex2d != null && imp.textureType != TextureImporterType.Sprite)
                     {
                         bool npot = (tex2d.width & (tex2d.width - 1)) != 0 || (tex2d.height & (tex2d.height - 1)) != 0;
-                        if (npot) reasons.Add($"non-power-of-2 ({tex2d.width}x{tex2d.height}) — บาง platform บีบอัดไม่ได้");
+                        if (npot) reasons.Add($"non-power-of-two ({tex2d.width}x{tex2d.height}); some platforms cannot compress this texture");
                     }
 
                     if (reasons.Count > 0)
@@ -964,24 +935,20 @@ public class {className} : MonoBehaviour
             });
         }
 
-        // ── Audit: asset ที่อาจไม่ได้ใช้ (REPORT ONLY — ไม่ลบ) ──────────────
         static string AuditUnusedAssets()
         {
             return ExecuteOnMainThread(() =>
             {
-                // รวม dependency ของทุก scene + ทุก prefab ใน Resources/Addressables (กันพลาด)
                 var used = new HashSet<string>();
                 var roots = new List<string>();
                 // Scenes
                 roots.AddRange(AssetDatabase.FindAssets("t:Scene").Select(AssetDatabase.GUIDToAssetPath));
-                // Resources — โหลด runtime ด้วยชื่อ นับทุกอย่างเป็น used
                 foreach (var g in AssetDatabase.FindAssets("", new[] { "Assets/Resources" }))
                     roots.Add(AssetDatabase.GUIDToAssetPath(g));
                 // StreamingAssets
                 if (AssetDatabase.IsValidFolder("Assets/StreamingAssets"))
                     foreach (var g in AssetDatabase.FindAssets("", new[] { "Assets/StreamingAssets" }))
                         roots.Add(AssetDatabase.GUIDToAssetPath(g));
-                // Addressables (ถ้ามี) — อ่าน entries ผ่าน reflection ไม่ผูก assembly
                 try {
                     if (AssetDatabase.IsValidFolder("Assets/AddressableAssetsData"))
                         foreach (var g in AssetDatabase.FindAssets("t:AddressableAssetGroup", new[] { "Assets/AddressableAssetsData" }))
@@ -995,7 +962,11 @@ public class {className} : MonoBehaviour
                                 if (!string.IsNullOrEmpty(ap)) roots.Add(ap);
                             }
                         }
-                } catch { }
+                }
+                catch (Exception exception)
+                {
+                    Debug.LogWarning($"[AI Unity MCP Server] Addressables usage scan failed: {exception.Message}");
+                }
 
                 foreach (var dep in AssetDatabase.GetDependencies(roots.ToArray(), true))
                     used.Add(dep);
@@ -1011,7 +982,6 @@ public class {className} : MonoBehaviour
                     if (candidates.Count >= 150) break;
                 }
 
-                // จัดกลุ่มตาม type เพื่ออ่านง่ายขึ้น
                 var byType = new Dictionary<string, int>();
                 foreach (var p in candidates)
                 {
@@ -1042,12 +1012,11 @@ public class {className} : MonoBehaviour
                     sb.Append($"\"{EscapeJson(candidates[i])}\"");
                 }
                 sb.Append("]");
-                return $"{{\"warning\":\"REPORT ONLY — ตรวจด้วยตาก่อนลบ! string-load/runtime-generated มองไม่เห็น\"," +
+                return $"{{\"warning\":\"REPORT ONLY. Inspect before deleting; string-loaded and runtime-generated assets are not visible to this scan.\"," +
                        $"\"maybe_unused\":{candidates.Count},\"byType\":{typeSb},\"assets\":{sb}}}";
             });
         }
 
-        // ── Audit: folder ว่าง ─────────────────────────────────────────────
         static string AuditEmptyFolders()
         {
             return ExecuteOnMainThread(() =>
@@ -1088,7 +1057,6 @@ public class {className} : MonoBehaviour
             });
         }
 
-        // ── watch_alert — watch + เงื่อนไข + เตือน (log warning) ──────────────
         static string WatchAlert(string body)
         {
             var data = ParseReq<WatchAlertRequest>(body);
@@ -1099,11 +1067,10 @@ public class {className} : MonoBehaviour
                 string err = RuntimeWatch.AddAlert(data.objectName, data.component, data.field, data.op, data.value);
                 if (err != null) return $"{{\"error\":\"{EscapeJson(err)}\"}}";
                 return $"{{\"alertSet\":\"{EscapeJson(data.field)} {EscapeJson(data.op)} {data.value}\"," +
-                       "\"note\":\"จะ log warning + นับเมื่อเงื่อนไขกลายเป็นจริงตอน Play — ดูผลผ่าน watch_get หรือแผง 👁 Watch\"}";
+                       "\"note\":\"Logs a warning and increments the count when the condition becomes true in Play Mode. Read results with watch_get or the Watch panel.\"}";
             });
         }
 
-        // ── event_log — แปะ probe ดัก collision/trigger ของ object ที่เลือก ──
         static string EventLogAttach(string body)
         {
             var data = ParseReq<NameRequest>(body);
@@ -1112,12 +1079,10 @@ public class {className} : MonoBehaviour
                 string err = EventLog.Attach(data.name);
                 if (err != null) return $"{{\"error\":\"{EscapeJson(err)}\"}}";
                 return $"{{\"probing\":{EventLog.ProbeCount}," +
-                       "\"note\":\"ดัก OnCollision/OnTrigger ตอน Play (object ต้องมี Collider/Rigidbody) — ดูผล event_log_get, ล้าง event_log_clear, ถอดเองตอนออก Play\"}";
+                       "\"note\":\"Captures OnCollision and OnTrigger events in Play Mode; the object needs the appropriate Collider and Rigidbody. Read with event_log_get and clear with event_log_clear. Probes detach on Play Mode exit.\"}";
             });
         }
 
-        // ── watch_animator — ดู Animator state/parameter สด ──────────────────
-        // เพิ่ม watch แบบพิเศษ: field "@state" (state ปัจจุบัน) หรือ "@param:Name"
         static string WatchAnimator(string body)
         {
             var data = ParseReq<WatchAnimatorRequest>(body);
@@ -1127,16 +1092,14 @@ public class {className} : MonoBehaviour
                 string err = RuntimeWatch.AddWatch(data.objectName, "Animator", field);
                 if (err != null) return $"{{\"error\":\"{EscapeJson(err)}\"}}";
                 return $"{{\"watchingAnimator\":\"{EscapeJson(field)}\"," +
-                       "\"note\":\"ดูค่าสดผ่าน watch_get หรือแผง 👁 Watch — @state=state ปัจจุบัน, @param:Name=ค่า parameter\"}";
+                       "\"note\":\"Read live values with watch_get or the Watch panel. @state selects the current state; @param:Name selects a parameter.\"}";
             });
         }
 
-        // ── Refactor Audit — สแกน .cs ทุกไฟล์ รายงาน refactoring opportunities ──
         static string RefactorAuditCmd(string body)
         {
             var data = ParseReq<TopNRequest>(body);
             int n = data != null && data.topN > 0 ? data.topN : 10;
-            // ดึง dataPath บน main thread ก่อน แล้วรัน I/O หนักบน background thread
             string dataPath = ExecuteOnMainThread(() => UnityEngine.Application.dataPath);
             return RefactorAudit.Analyze(n, dataPath);
         }
@@ -1161,8 +1124,6 @@ public class {className} : MonoBehaviour
         // ── Helpers ───────────────────────────────────────────────────────────
         static int _mainThreadId = -1;
 
-        // คิวงานที่ต้องรันบน main thread — drain ทุก frame ผ่าน EditorApplication.update
-        // (เร็ว/แน่นอนกว่า delayCall ที่ยิงแค่ frame ถัดไปและบางทีไม่ tick ตอน editor idle)
         static readonly System.Collections.Concurrent.ConcurrentQueue<Action> _mainQueue
             = new System.Collections.Concurrent.ConcurrentQueue<Action>();
 
@@ -1170,7 +1131,7 @@ public class {className} : MonoBehaviour
         static void CaptureMainThread()
         {
             _mainThreadId = System.Threading.Thread.CurrentThread.ManagedThreadId;
-            _allowWritesCache = EditorPrefs.GetBool("DeltaMCP_AllowWrites", false);   // prime cache บน main thread
+            _allowWritesCache = EditorPrefs.GetBool("AIUnityMCPServer_AllowWrites", false);
             EditorApplication.update -= PumpMainQueue;
             EditorApplication.update += PumpMainQueue;
         }
@@ -1179,21 +1140,19 @@ public class {className} : MonoBehaviour
         {
             while (_mainQueue.TryDequeue(out var job))
             {
-                try { job(); } catch { /* แต่ละ job จัดการ exception เองแล้ว */ }
+                try { job(); }
+                catch (Exception exception) { Debug.LogError("[AI Unity MCP Server] Queued main-thread job failed: " + exception.Message); }
             }
         }
 
         static string ExecuteOnMainThread(Func<string> action)
         {
-            // ถ้าถูกเรียกจาก main thread อยู่แล้ว (เช่น Chat Window) → รันตรงๆ
-            // ไม่งั้นจะ block ตัวเอง ทำให้คิวไม่ถูก drain → timeout (deadlock)
             if (System.Threading.Thread.CurrentThread.ManagedThreadId == _mainThreadId)
             {
                 try { return action(); }
                 catch (Exception e) { return $"{{\"error\":\"{EscapeJson(e.Message)}\"}}"; }
             }
 
-            // ถูกเรียกจาก background thread (HTTP server) → enqueue ไป main thread แล้วรอ
             string result = null;
             Exception ex = null;
             var done = new System.Threading.ManualResetEventSlim(false);
@@ -1205,9 +1164,8 @@ public class {className} : MonoBehaviour
                 finally { done.Set(); }
             });
 
-            // 20 วิ — เผื่อ scene ใหญ่ (SceneHierarchy serialize ทั้ง scene) / ตอน Unity compile-import
             if (!done.Wait(20000))
-                return "{\"error\":\"timeout (20s) — main thread busy (กำลัง compile/import? หรือ scene ใหญ่มาก)\"}";
+                return "{\"error\":\"Timeout after 20 seconds. The main thread may be compiling, importing or processing a very large scene.\"}";
             if (ex != null) return $"{{\"error\":\"{EscapeJson(ex.Message)}\"}}";
             return result ?? "{\"error\":\"no result\"}";
         }
@@ -1226,19 +1184,11 @@ public class {className} : MonoBehaviour
         static string EscapeJson(string s) =>
             s?.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\n", "\\n").Replace("\r", "") ?? "";
 
-        // public alias — ใช้จาก class อื่นใน namespace เดียวกัน (เช่น RefactorAudit)
         public static string EscapeJsonPublic(string s) => EscapeJson(s);
 
-        // instanceId ที่ส่งกลับใน JSON — บังคับ InvariantCulture กัน culture ที่ใช้เครื่องหมายลบ
-        // คนละตัว (เช่น U+2212) ทำให้ JSON พัง เพราะ id ของ object ใน scene เป็นค่าติดลบ
         internal static string GetResponseInstanceId(UnityEngine.Object target) =>
             ReadInstanceId(target).ToString(System.Globalization.CultureInfo.InvariantCulture);
 
-        // Unity 6.4 deprecate GetInstanceID() (กลายเป็น error CS0619 ตั้งแต่ 6.5) ให้ไปใช้
-        // EntityId แบบ 64-bit แทน แต่ไม่มี API แปลง EntityId → int ที่ไม่ obsolete สักตัว
-        // (ตัว implicit operator int ก็ถูกมาร์ค error เหมือนกัน) — จึงตัด 32 bit ล่างจาก
-        // ToULong() เอง ซึ่งให้ผลเท่ากับ operator เดิมเป๊ะ ๆ (0x07E25105FFFFB1E0 → -20000)
-        // ค่าที่ client เห็นจึงเหมือนเดิมทุกเวอร์ชัน
         static int ReadInstanceId(UnityEngine.Object target)
         {
 #if UNITY_6000_4_OR_NEWER
@@ -1248,8 +1198,6 @@ public class {className} : MonoBehaviour
 #endif
         }
 
-        // parse JSON เป็น request object แบบ thread-safe (ไม่ใช้ JsonUtility ที่ต้อง main thread)
-        // รองรับ field: string, int, float, bool, float[] — พอสำหรับ request ทุกตัว
         static T ParseReq<T>(string json) where T : new()
         {
             var t = new T();

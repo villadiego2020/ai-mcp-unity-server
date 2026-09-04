@@ -6,10 +6,7 @@ using UnityEngine;
 namespace MCPBridge
 {
     /// <summary>
-    /// A3: อ่านเนื้อใน prefab — โครงสร้าง GameObject + component สำคัญ
     /// (mesh/collider/material/rigidbody/particle/light/script/Fusion)
-    /// ⚠️ ใช้ AssetDatabase → ต้องเรียกบน main thread เท่านั้น (chat: Enqueue / handler: ExecuteOnMainThread)
-    /// cap จำนวน node กัน prefab ใหญ่ทำ output บานปลาย
     /// </summary>
     public static class PrefabInspector
     {
@@ -22,7 +19,7 @@ namespace MCPBridge
             sb.Append($"Prefab: {prefabPath}");
             int budget = maxNodes;
             Walk(go.transform, sb, 0, ref budget);
-            if (budget <= 0) sb.Append($"\n... (ตัด — prefab ใหญ่เกิน {maxNodes} node)");
+            if (budget <= 0) sb.Append($"\n... (truncated; prefab exceeds {maxNodes} nodes)");
             return sb.ToString();
         }
 
@@ -52,7 +49,7 @@ namespace MCPBridge
             switch (c)
             {
                 case Transform _:
-                    return null;   // ข้าม — มีทุก node เป็น noise
+                    return null;
                 case MeshFilter mf:
                     var m = mf.sharedMesh;
                     if (m == null) return "MeshFilter (no mesh)";
@@ -63,7 +60,7 @@ namespace MCPBridge
                 case MeshRenderer mr:
                     return $"MeshRenderer: mats={mr.sharedMaterials.Length} [{Mats(mr.sharedMaterials)}], shadow={mr.shadowCastingMode}, gpuInstance?={AnyInstanced(mr.sharedMaterials)}";
                 case MeshCollider mc:
-                    return $"MeshCollider: convex={mc.convex}, trigger={mc.isTrigger}{(mc.sharedMesh ? ", mesh=" + mc.sharedMesh.name : "")}  {(mc.convex ? "" : "⚠️ non-convex แพง")}";
+                    return $"MeshCollider: convex={mc.convex}, trigger={mc.isTrigger}{(mc.sharedMesh ? ", mesh=" + mc.sharedMesh.name : "")}  {(mc.convex ? "" : "⚠️ expensive non-convex collider")}";
                 case Collider col:
                     return $"{col.GetType().Name}: trigger={col.isTrigger}";
                 case Rigidbody rb:
@@ -77,7 +74,6 @@ namespace MCPBridge
                 case Animator an:
                     return $"Animator: controller={(an.runtimeAnimatorController ? an.runtimeAnimatorController.name : "none")}";
                 case MonoBehaviour mb:
-                    // NetworkObject / NetworkBehaviour (Fusion) ก็เป็น MonoBehaviour — ชื่อ type บอกเอง
                     return $"Script: {mb.GetType().Name}";
                 default:
                     return c.GetType().Name;

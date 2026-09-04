@@ -39,7 +39,9 @@ namespace MCPBridge.Tests
         public void GeneratedMcpJson_KeepsArgsPathIntact()
         {
             string args = "C:/path with spaces/com.mcpbridge/Server~/index.js";
-            StringAssert.Contains($"\"{args}\"", MCPServer.GeneratedMcpJson(args));
+            string generated = MCPServer.GeneratedMcpJson(args);
+            StringAssert.Contains($"\"{args}\"", generated);
+            StringAssert.Contains("\"AIUnityMCPServer\"", generated);
         }
 
         [Test]
@@ -48,13 +50,12 @@ namespace MCPBridge.Tests
             Assert.IsTrue(MCPServer.IsGeneratedByThisPackage(MCPServer.GeneratedMcpJson("./Packages/com.mcpbridge/Server~/index.js")));
         }
 
-        // ── IsGeneratedByThisPackage: ตัดสินว่าไฟล์ไหนเขียนทับได้ ──────────
         [Test]
-        public void IsGeneratedByThisPackage_LegacyHardcodedFile_IsOwned()
+        public void IsGeneratedByThisPackage_FormerUnityKey_IsNotOwned()
         {
-            string legacy = "{\n  \"mcpServers\": {\n    \"unity\": {\n      \"command\": \"node\",\n"
-                          + "      \"args\": [\"./Tools/unity-mcp-server/index.js\"]\n    }\n  }\n}\n";
-            Assert.IsTrue(MCPServer.IsGeneratedByThisPackage(legacy));
+            string former = "{\n  \"mcpServers\": {\n    \"unity\": {\n      \"command\": \"node\",\n"
+                          + "      \"args\": [\"./other-server/index.js\"]\n    }\n  }\n}\n";
+            Assert.IsFalse(MCPServer.IsGeneratedByThisPackage(former));
         }
 
         [Test]
@@ -68,14 +69,14 @@ namespace MCPBridge.Tests
         public void IsGeneratedByThisPackage_FileWithAnotherServer_IsNotOwned()
         {
             string userFile = "{\n  \"mcpServers\": {\n    \"postgres\": { \"command\": \"npx\", \"args\": [\"pg-mcp\"] },\n"
-                            + "    \"unity\": { \"command\": \"node\", \"args\": [\"./Packages/com.mcpbridge/Server~/index.js\"] }\n  }\n}\n";
+                            + "    \"AIUnityMCPServer\": { \"command\": \"node\", \"args\": [\"./Packages/com.mcpbridge/Server~/index.js\"] }\n  }\n}\n";
             Assert.IsFalse(MCPServer.IsGeneratedByThisPackage(userFile));
         }
 
         [Test]
         public void IsGeneratedByThisPackage_FileWithExtraKeys_IsNotOwned()
         {
-            string userFile = "{\n  \"mcpServers\": {\n    \"unity\": { \"command\": \"node\", \"args\": [\"./x.js\"] }\n  },\n"
+            string userFile = "{\n  \"mcpServers\": {\n    \"AIUnityMCPServer\": { \"command\": \"node\", \"args\": [\"./x.js\"] }\n  },\n"
                             + "  \"permissions\": { \"allow\": [\"*\"] }\n}\n";
             Assert.IsFalse(MCPServer.IsGeneratedByThisPackage(userFile));
         }
@@ -83,7 +84,7 @@ namespace MCPBridge.Tests
         [Test]
         public void IsGeneratedByThisPackage_UnityEntryWithEnvBlock_IsNotOwned()
         {
-            string withEnv = "{\n  \"mcpServers\": {\n    \"unity\": { \"command\": \"node\", \"env\": { \"UNITY_MCP_PORT\": \"23457\" },\n"
+            string withEnv = "{\n  \"mcpServers\": {\n    \"AIUnityMCPServer\": { \"command\": \"node\", \"env\": { \"UNITY_MCP_PORT\": \"23457\" },\n"
                            + "      \"args\": [\"./Packages/com.mcpbridge/Server~/index.js\"] }\n  }\n}\n";
             Assert.IsFalse(MCPServer.IsGeneratedByThisPackage(withEnv));
         }

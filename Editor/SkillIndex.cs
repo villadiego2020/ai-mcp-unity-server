@@ -7,8 +7,6 @@ using UnityEngine;
 namespace MCPBridge
 {
     /// <summary>
-    /// สแกนสกิล/slash-command ที่มีในเครื่อง สำหรับ '/' picker ในแชต (โหมด Subscription/CLI)
-    /// อ่านจาก .claude/skills/*/SKILL.md และ .claude/commands/*.md ของ project + Delta-Project + user home
     /// </summary>
     public static class SkillIndex
     {
@@ -16,7 +14,7 @@ namespace MCPBridge
         {
             public string Name;
             public string Description;
-            public string Source;   // project / delta-project / user
+            public string Source;   // project / user
         }
 
         static List<SkillEntry> _cache;
@@ -30,7 +28,6 @@ namespace MCPBridge
             var roots = new (string path, string tag)[]
             {
                 (projectRoot, "project"),
-                (Path.Combine(projectRoot, "..", "Delta-Project"), "delta-project"),
                 (home, "user"),
             };
 
@@ -86,7 +83,6 @@ namespace MCPBridge
             return (name, desc);
         }
 
-        // index ทั้งคลังสำหรับแนบเข้า system prompt (CLI mode) — ให้ AI เห็นว่ามี playbook อะไร แล้วเลือกเปิดอ่านเอง
         public static string PromptIndex(int max = 48)
         {
             if (_cache == null) Refresh();
@@ -95,7 +91,7 @@ namespace MCPBridge
             int n = 0;
             foreach (var e in _cache)
             {
-                if (n++ >= max) { sb.Append($"- …และอีก {_cache.Count - max} ตัว\n"); break; }
+                if (n++ >= max) { sb.Append($"- …and {_cache.Count - max} more\n"); break; }
                 sb.Append("- ").Append(e.Name).Append(" [").Append(e.Source).Append(']');
                 if (!string.IsNullOrEmpty(e.Description)) sb.Append(" — ").Append(e.Description);
                 sb.Append('\n');

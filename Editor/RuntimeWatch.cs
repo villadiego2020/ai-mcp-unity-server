@@ -8,8 +8,6 @@ using UnityEngine;
 namespace MCPBridge
 {
     /// <summary>
-    /// RuntimeWatch — sample field/property ของ GameObject ทุก 0.5s ระหว่าง Play Mode
-    /// ดู trend (↑/↓/=) + history 10 ค่า เพื่อให้ AI วิเคราะห์ state change ได้
     /// </summary>
     [InitializeOnLoad]
     public static class RuntimeWatch
@@ -17,32 +15,30 @@ namespace MCPBridge
         class WatchEntry
         {
             public string objectName;
-            public string componentType;       // ว่าง = auto (หา component ที่มี field นั้นเอง)
+            public string componentType;
             public string fieldName;
-            public string resolvedComponent;   // component จริงที่ auto เจอ (โชว์ใน UI/report)
+            public string resolvedComponent;
             public readonly List<string> history = new List<string>();   // last 10 values
             public readonly List<string> timestamps = new List<string>();
-            public bool everFound;     // เคย resolve object เจอมั้ย (กันลบ watch ที่ชื่อพิมพ์ผิดตั้งแต่แรก)
-            public int missStreak;     // หาย (not found) ติดกันกี่ครั้ง → ใช้ auto-clear ตอน despawn
+            public bool everFound;
+            public int missStreak;
 
-            // ── alert (watch_alert) ── ว่าง = ไม่มี alert
             public string alertOp;        // lt|lte|gt|gte|eq|ne|changed
             public double alertThreshold;
-            public int alertCount;        // จำนวนครั้งที่เงื่อนไข "กลายเป็นจริง" (rising edge)
-            public bool alertWasTrue;     // สถานะรอบก่อน (จับ edge ไม่ให้สแปมทุก sample)
+            public int alertCount;
+            public bool alertWasTrue;
 
             public string Key => $"{objectName}.{componentType}.{fieldName}";
             public string ShowComponent => string.IsNullOrEmpty(componentType)
                 ? (string.IsNullOrEmpty(resolvedComponent) ? "auto" : resolvedComponent) : componentType;
         }
 
-        /// <summary>snapshot 1 แถวสำหรับ UI panel (ค่าปัจจุบัน + trend)</summary>
         public struct WatchView
         {
             public string key, objectName, component, field, value, trend, status;
-            public string[] history;     // ค่า history (ให้ panel วาด sparkline)
-            public string alert;         // คำอธิบายเงื่อนไข alert ("" = ไม่มี) เช่น "< 0"
-            public int alertCount;       // ทริกไปกี่ครั้ง (panel โชว์ 🔔)
+            public string[] history;
+            public string alert;
+            public int alertCount;
         }
 
         static readonly List<WatchEntry> _watches = new List<WatchEntry>();
@@ -51,8 +47,8 @@ namespace MCPBridge
         static int _sampleCount;
         const int MAX_HISTORY = 10;
         const double SAMPLE_INTERVAL = 0.5;
-        const string NOT_FOUND = "(not found)";   // object resolve ไม่เจอ (object-level)
-        const int DESPAWN_MISS = 10;              // หายติดกัน 10 ครั้ง (~5 วิ) + เคยเจอ → auto-clear (despawn)
+        const string NOT_FOUND = "(not found)";
+        const int DESPAWN_MISS = 10;
 
         static RuntimeWatch()
         {
@@ -73,7 +69,6 @@ namespace MCPBridge
             }
         }
 
-        // EditorApplication.update รันบน main thread — Unity API เรียกตรงได้
         static void Sample()
         {
             if (!Application.isPlaying) return;
@@ -93,8 +88,6 @@ namespace MCPBridge
                     if (val == NOT_FOUND)
                     {
                         w.missStreak++;
-                        // เคยเจอแล้วหายติดกันนาน = object ตาย/despawn → ลบ watch ออกอัตโนมัติ
-                        // (ถ้าไม่เคยเจอเลย = ชื่อผิด → ปล่อยให้โชว์ "(not found)" เป็น feedback ไม่ลบ)
                         if (w.everFound && w.missStreak >= DESPAWN_MISS)
                             (despawned ??= new List<WatchEntry>()).Add(w);
                     }
@@ -108,14 +101,13 @@ namespace MCPBridge
                     w.timestamps.Add(ts);
                     if (w.history.Count > MAX_HISTORY) { w.history.RemoveAt(0); w.timestamps.RemoveAt(0); }
 
-                    // alert: เงื่อนไขกลายเป็นจริง (rising edge) → นับ + log warning (ไม่สแปมทุก sample)
                     if (!string.IsNullOrEmpty(w.alertOp))
                     {
                         bool hit = EvalAlert(w, val);
                         if (hit && !w.alertWasTrue)
                         {
                             w.alertCount++;
-                            Debug.LogWarning($"[Watch alert] {w.Key} {AlertText(w)} → {val} (ครั้งที่ {w.alertCount})");
+                            Debug.LogWarning($"[Watch alert] {w.Key} {AlertText(w)} → {val} (occurrence {w.alertCount})");
                         }
                         w.alertWasTrue = hit;
                     }
@@ -131,7 +123,6 @@ namespace MCPBridge
                 var go = ResolveObject(w.objectName);
                 if (go == null) return NOT_FOUND;
 
-                // ── component ที่ระบุชื่อมา ──
                 if (!string.IsNullOrEmpty(w.componentType))
                 {
                     Component comp = null;
@@ -142,12 +133,11 @@ namespace MCPBridge
                         { comp = c; break; }
                     }
                     if (comp == null) return "(component not found)";
-                    if (w.fieldName.StartsWith("@"))   // ดู Animator state/param (watch_animator)
+                    if (w.fieldName.StartsWith("@"))
                         return SampleAnimator(comp as Animator, w.fieldName);
                     return TryResolvePath(comp, w.fieldName, out object v) ? FormatValue(v) : $"(field not found: {w.fieldName})";
                 }
 
-                // ── auto: หา component ที่มี field นี้เอง (สคริปต์เกมก่อน UnityEngine) ──
                 var comps = go.GetComponents<Component>();
                 for (int pass = 0; pass < 2; pass++)
                     foreach (var c in comps)
@@ -157,7 +147,7 @@ namespace MCPBridge
                         if (pass == 0 ? isUnity : !isUnity) continue;   // pass0 = game scripts, pass1 = unity
                         if (TryResolvePath(c, w.fieldName, out object v))
                         {
-                            w.resolvedComponent = c.GetType().Name;   // จำไว้โชว์ใน UI
+                            w.resolvedComponent = c.GetType().Name;
                             return FormatValue(v);
                         }
                     }
@@ -166,7 +156,6 @@ namespace MCPBridge
             catch (Exception e) { return $"(error: {e.Message})"; }
         }
 
-        // ดู Animator: "@state" = clip+normalizedTime ปัจจุบัน · "@param:Name" = ค่า parameter
         static string SampleAnimator(Animator anim, string field)
         {
             if (anim == null) return "(not an Animator)";
@@ -200,22 +189,18 @@ namespace MCPBridge
             return "(use @state or @param:Name)";
         }
 
-        // เดิน nested path "a.b.c" — true ถ้าทุก segment มีจริง (val อาจเป็น null ได้)
         static bool TryResolvePath(object root, string path, out object val)
         {
             object cur = root;
             foreach (var seg in path.Split('.'))
             {
-                if (cur == null) { val = null; return true; }   // null กลางทาง = ค่าจริงคือ null
+                if (cur == null) { val = null; return true; }
                 if (!TryGetMember(cur, seg, out cur)) { val = null; return false; }
             }
             val = cur;
             return true;
         }
 
-        // แปลงค่าเป็น string — ถ้าเป็น collection (List/array/Dictionary) โชว์ count + รายการ
-        // (กัน ToString ของ List ที่ได้ "System.Collections...List`1" ไร้ประโยชน์)
-        // → ใช้ดู status effect ค้าง: watch m_statusEffects → "count=3 [stun, burn, slow]"
         static string FormatValue(object v)
         {
             if (v == null) return "null";
@@ -225,7 +210,7 @@ namespace MCPBridge
                 int i = 0;
                 foreach (var it in col)
                 {
-                    if (i++ >= 8) { items.Add("…"); break; }   // cap กัน list ยาว
+                    if (i++ >= 8) { items.Add("…"); break; }
                     items.Add(ItemLabel(it));
                 }
                 return $"count={col.Count} [{string.Join(", ", items)}]";
@@ -233,9 +218,6 @@ namespace MCPBridge
             return v.ToString();
         }
 
-        // label item ใน collection — โชว์ ID/ชื่อ + tag passive/เวลาเหลือ (ถ้า object มี member พวกนี้)
-        // → status effect: "stun(1.2s)" = temporary · "bloodlust(passive)" = ถาวร
-        //   ทำให้แยก "ตัวที่ควรหายแต่ค้าง (บั๊ก)" ออกจาก "passive ติดถาวร (ปกติ)" ได้
         static string ItemLabel(object it)
         {
             try
@@ -244,58 +226,47 @@ namespace MCPBridge
                 var t = it.GetType();
                 if (t.IsPrimitive || it is string) return it.ToString();
 
-                // identity: ลอง ID → Name → Key → ชื่อ type
                 string id = GetMember(it, "ID")?.ToString() ?? GetMember(it, "Name")?.ToString()
                           ?? GetMember(it, "Key")?.ToString() ?? t.Name;
 
-                // tag: HasDuration=false → passive · true → เวลาเหลือ (TimeLeft)
                 object hasDur = GetMember(it, "HasDuration");
                 if (hasDur != null)
                 {
                     string hs = hasDur.ToString().ToLowerInvariant();
-                    if (hs == "false" || hs == "0") return id + "(passive)";   // ถาวร — ไม่ใช่บั๊ก
+                    if (hs == "false" || hs == "0") return id + "(passive)";
                     object tl = GetMember(it, "TimeLeft");
-                    if (tl != null) return $"{id}({tl}s)";                       // temporary — มีเวลาเหลือ
+                    if (tl != null) return $"{id}({tl}s)";
                 }
                 return id;
             }
             catch { return it?.ToString() ?? "null"; }
         }
 
-        // อ่าน member แบบ crash-safe (ใช้ TryGetMember = field/property getter ผ่าน GetGetMethod.Invoke)
         static object GetMember(object obj, string name)
             => TryGetMember(obj, name, out var v) ? v : null;
 
-        // หา GameObject แบบยืดหยุ่น (networked object spawn runtime ชื่อมักเป็น "X(Clone)" / มี prefix)
-        // ลำดับ: ชื่อตรงเป๊ะ → ชื่อตรง (ไม่สน case) → ชื่อ "contains" → ตัวที่เลือกใน Hierarchy
         static GameObject ResolveObject(string name)
         {
             var sel = Selection.activeGameObject;
             if (string.IsNullOrEmpty(name)) return sel;
 
-            // ถ้าผู้ใช้คลิกเลือก object ที่ชื่อตรง/contains query ไว้ → ใช้ตัวนั้นเลย
-            // (ชี้ชัดสุด — กันสับสนตอนมีหลายตัวชื่อคล้ายกัน เช่น hero P1 vs P2 ใน MPPM)
             if (sel != null && sel.name.IndexOf(name, StringComparison.OrdinalIgnoreCase) >= 0) return sel;
 
-            var exact = GameObject.Find(name);   // active + ตรงเป๊ะ (เร็วสุด)
+            var exact = GameObject.Find(name);
             if (exact != null) return exact;
 
-            // fuzzy: ไล่ทุก Transform ในฉาก (active) — เจอ "base_avatar(Clone)" จากคำว่า "base_avatar"
             GameObject contains = null;
             foreach (var t in UnityEngine.Object.FindObjectsByType<Transform>(FindObjectsInactive.Exclude, FindObjectsSortMode.None))
             {
                 string n = t.gameObject.name;
-                if (string.Equals(n, name, StringComparison.OrdinalIgnoreCase)) return t.gameObject;   // ตรง (ไม่สน case)
+                if (string.Equals(n, name, StringComparison.OrdinalIgnoreCase)) return t.gameObject;
                 if (contains == null && n.IndexOf(name, StringComparison.OrdinalIgnoreCase) >= 0) contains = t.gameObject;
             }
             if (contains != null) return contains;
 
-            // ระบุชื่อมาแต่หาไม่เจอ → null (→ "(not found)") เด็ดขาด
-            // ไม่ fallback ไปตัวที่คลิก (กันโชว์ค่าตัวผิดตอน target ตาย/despawn)
             return null;
         }
 
-        // อ่าน member (field ก่อน แล้ว property) — public + private
         static bool TryGetMember(object obj, string name, out object val)
         {
             val = null;
@@ -306,9 +277,6 @@ namespace MCPBridge
             var pi = t.GetProperty(name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
             if (pi != null && pi.CanRead && pi.GetIndexParameters().Length == 0)
             {
-                // ใช้ getter MethodInfo.Invoke แทน pi.GetValue() —
-                // เลี่ยง CreateGetterDelegate → mono_class_get_methods_by_name ที่ assert/crash
-                // บน Fusion [Networked] property บางตัว (เคยทำ Unity crash ดิบมาแล้ว)
                 var getter = pi.GetGetMethod(true);
                 if (getter == null) return false;
                 val = getter.Invoke(obj, null);
@@ -356,7 +324,6 @@ namespace MCPBridge
             return $"{sym} {w.alertThreshold}";
         }
 
-        // map op จากหลายรูปแบบ → canonical (null = ไม่รองรับ)
         static string NormalizeOp(string op)
         {
             switch ((op ?? "").Trim().ToLowerInvariant())
@@ -375,36 +342,30 @@ namespace MCPBridge
         // ── Public API ────────────────────────────────────────────────────────
 
         /// <summary>
-        /// เพิ่ม watch — คืน error string หรือ null ถ้าสำเร็จ.
-        /// component ว่างได้ → auto หา component ที่มี field นั้นเอง.
-        /// object ว่างได้ → ใช้ GameObject ที่เลือกใน Hierarchy ตอนนี้ (pin ชื่อไว้).
         /// </summary>
         public static string AddWatch(string objectName, string componentType, string fieldName)
             => AddWatchCore(objectName, componentType, fieldName, null, 0);
 
         /// <summary>
-        /// watch_alert — watch + เงื่อนไข แล้ว log warning + นับ ตอนเงื่อนไข "กลายเป็นจริง".
-        /// op: lt|lte|gt|gte|eq|ne (เทียบ value) หรือ changed (ค่าเปลี่ยน). คืน error หรือ null.
         /// </summary>
         public static string AddAlert(string objectName, string componentType, string fieldName, string op, double threshold)
         {
             string nop = NormalizeOp(op);
-            if (nop == null) return "op ต้องเป็น lt|lte|gt|gte|eq|ne|changed (หรือ < <= > >= == != )";
+            if (nop == null) return "op must be lt|lte|gt|gte|eq|ne|changed (or < <= > >= == !=)";
             return AddWatchCore(objectName, componentType, fieldName, nop, threshold);
         }
 
         static string AddWatchCore(string objectName, string componentType, string fieldName, string alertOp, double alertThreshold)
         {
-            if (string.IsNullOrEmpty(fieldName)) return "ต้องระบุ field (เช่น currentHp หรือ Damageable.Hp.Value)";
+            if (string.IsNullOrEmpty(fieldName)) return "field is required (for example currentHp or Damageable.Hp.Value)";
 
-            // object ว่าง → ใช้ตัวที่เลือกใน Hierarchy (main thread เท่านั้น — เรียกผ่าน ExecuteOnMainThread/OnGUI)
             if (string.IsNullOrEmpty(objectName))
             {
                 var sel = Selection.activeGameObject;
-                if (sel == null) return "ไม่ได้ระบุ object และไม่ได้เลือกอะไรใน Hierarchy — เลือก GameObject ก่อน หรือส่ง objectName";
+                if (sel == null) return "No object was specified and the Hierarchy selection is empty. Select a GameObject or provide objectName.";
                 objectName = sel.name;
             }
-            componentType = componentType?.Trim() ?? "";   // ว่าง = auto
+            componentType = componentType?.Trim() ?? "";
 
             lock (_lock)
             {
@@ -412,9 +373,8 @@ namespace MCPBridge
                 foreach (var w in _watches)
                     if (w.Key == key)
                     {
-                        // มี watch อยู่แล้ว — ถ้ามาพร้อม alert ก็แค่อัปเดตเงื่อนไข (ไม่ถือเป็น error)
                         if (alertOp != null) { w.alertOp = alertOp; w.alertThreshold = alertThreshold; w.alertWasTrue = false; return null; }
-                        return $"watch มีอยู่แล้ว: {key}";
+                        return $"Watch already exists: {key}";
                     }
 
                 _watches.Add(new WatchEntry
@@ -429,7 +389,6 @@ namespace MCPBridge
             return null;
         }
 
-        /// <summary>ลบ watch ตัวเดียวตาม key (objectName.componentType.fieldName) — คืน true ถ้าเจอ+ลบ</summary>
         public static bool RemoveWatch(string key)
         {
             lock (_lock)
@@ -441,7 +400,6 @@ namespace MCPBridge
             }
         }
 
-        /// <summary>snapshot รายตัวสำหรับ UI panel</summary>
         public static List<WatchView> Snapshot()
         {
             var list = new List<WatchView>();
@@ -464,10 +422,8 @@ namespace MCPBridge
             return list;
         }
 
-        /// <summary>มี watch กี่ตัว (ให้ UI โชว์ count บนปุ่ม)</summary>
         public static int Count { get { lock (_lock) return _watches.Count; } }
 
-        /// <summary>JSON รายงานสถานะปัจจุบันของ watch ทั้งหมด</summary>
         public static string GetReport()
         {
             var sb = new StringBuilder();
@@ -513,7 +469,6 @@ namespace MCPBridge
             return sb.ToString();
         }
 
-        /// <summary>ลบ watch ทั้งหมด</summary>
         public static void ClearAll()
         {
             lock (_lock) { _watches.Clear(); }

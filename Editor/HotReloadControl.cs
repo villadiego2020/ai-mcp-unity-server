@@ -5,12 +5,9 @@ using UnityEngine;
 namespace MCPBridge
 {
     /// <summary>
-    /// คุม Hot Reload (SingularityGroup) ผ่าน reflection — ไม่ต้องผูก asmdef กับ package
-    /// ใช้สั่งเปิด + เช็คสถานะจาก AI ได้ (เช่น "เล่นอยู่แล้วขอแก้โค้ด → เปิด Hot Reload ให้มั้ย")
     /// </summary>
     public static class HotReloadControl
     {
-        // ServerHealthCheck.I.IsServerHealthy = Hot Reload server กำลังรันอยู่หรือไม่
         public static bool IsRunning()
         {
             try
@@ -26,21 +23,20 @@ namespace MCPBridge
             catch { return false; }
         }
 
-        // HotReloadCli.StartAsync() — เริ่ม Hot Reload server (ต้องอยู่ main thread)
         public static bool Start(out string msg)
         {
             try
             {
-                if (IsRunning()) { msg = "Hot Reload กำลังรันอยู่แล้ว"; return true; }
+                if (IsRunning()) { msg = "Hot Reload is already running"; return true; }
                 var t = FindType("SingularityGroup.HotReload.Editor.Cli.HotReloadCli");
-                if (t == null) { msg = "ไม่พบ Hot Reload package (com.singularitygroup.hotreload)"; return false; }
+                if (t == null) { msg = "Hot Reload package not found (com.singularitygroup.hotreload)"; return false; }
                 var m = t.GetMethod("StartAsync", BindingFlags.Public | BindingFlags.Static, null, Type.EmptyTypes, null);
-                if (m == null) { msg = "ไม่พบ HotReloadCli.StartAsync()"; return false; }
-                m.Invoke(null, null);   // เป็น async — fire-and-forget, server จะ start ใน background
-                msg = "สั่งเปิด Hot Reload แล้ว (server กำลัง start — รอ ~2-5 วิ)";
+                if (m == null) { msg = "HotReloadCli.StartAsync() not found"; return false; }
+                m.Invoke(null, null);
+                msg = "Hot Reload start requested; allow approximately 2–5 seconds for the server to start";
                 return true;
             }
-            catch (Exception e) { msg = "เปิด Hot Reload ไม่สำเร็จ: " + e.Message; return false; }
+            catch (Exception e) { msg = "Could not start Hot Reload: " + e.Message; return false; }
         }
 
         static Type FindType(string fullName)

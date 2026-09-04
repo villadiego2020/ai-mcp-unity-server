@@ -10,23 +10,19 @@ using Debug = UnityEngine.Debug;
 namespace MCPBridge
 {
     /// <summary>
-    /// ตรวจสุขภาพ Unity แบบ real-time บน background thread (ไม่แตะ main thread / ไม่เรียก AI)
-    /// - memory สูง/spike (WorkingSet + GC heap) · main-thread stall (อาจค้าง) ผ่าน heartbeat
-    /// - log lifecycle: เข้า/ออก Play, ปิด Unity, ก่อน recompile
-    /// เขียนลง monitor.log (ไฟล์เดียวกับ breadcrumb ฝั่ง runtime — เขียนคนละ writer แต่ไฟล์เดียว)
     /// </summary>
     [InitializeOnLoad]
     public static class RealtimeMonitor
     {
-        const string PREF_ENABLED = "DeltaMCP_MonitorEnabled";
-        const string PREF_MEM_MB   = "DeltaMCP_MonitorMemMB";
+        const string PREF_ENABLED = "AIUnityMCPServer_MonitorEnabled";
+        const string PREF_MEM_MB   = "AIUnityMCPServer_MonitorMemMB";
         const int    SPIKE_MB      = 800;
         const int    STALL_MS      = 5000;
         const int    POLL_MS       = 1000;
 
         static Thread _thread;
         static volatile bool _running;
-        static string _logPath;   // cache บน main thread (background ใช้ต่อได้)
+        static string _logPath;
 
         static readonly Stopwatch _sw = Stopwatch.StartNew();
         static long _lastBeatMs;
@@ -58,7 +54,7 @@ namespace MCPBridge
             if (_running) return;
             _running = true;
 
-            EnsureLogPath();                 // cache path บน main thread
+            EnsureLogPath();
             if (clearLog) ClearLog();
 
             EditorApplication.update += Heartbeat;
@@ -68,10 +64,10 @@ namespace MCPBridge
 
             _memThresholdMB = MemThresholdMB;
             Interlocked.Exchange(ref _lastBeatMs, _sw.ElapsedMilliseconds);
-            _thread = new Thread(Loop) { IsBackground = true, Name = "DeltaMCP-Monitor" };
+            _thread = new Thread(Loop) { IsBackground = true, Name = "AIUnityMCPServer-Monitor" };
             _thread.Start();
-            LogLine("MONITOR", "เริ่มตรวจสอบ (threshold " + _memThresholdMB + "MB)");
-            Debug.Log($"[MCP] Realtime monitor ON\nlog: {_logPath}");
+            LogLine("MONITOR", "Monitoring started (threshold " + _memThresholdMB + "MB)");
+            Debug.Log($"[AI Unity MCP Server] Realtime monitor ON\nlog: {_logPath}");
         }
 
         public static void Stop()
@@ -84,8 +80,8 @@ namespace MCPBridge
             AssemblyReloadEvents.beforeAssemblyReload -= OnBeforeReload;
             try { _thread?.Join(300); } catch { }
             _thread = null;
-            LogLine("MONITOR", "หยุดตรวจสอบ");
-            Debug.Log($"[MCP] Realtime monitor OFF\nlog: {_logPath}");
+            LogLine("MONITOR", "Monitoring stopped");
+            Debug.Log($"[AI Unity MCP Server] Realtime monitor OFF\nlog: {_logPath}");
         }
 
         static int _beatFrame;
@@ -105,15 +101,13 @@ namespace MCPBridge
             string extra = "";
             if (c == PlayModeStateChange.ExitingPlayMode)
             {
-                // นับ object ที่จะถูก destroy ตอนออก Play → รู้ว่าค้างเพราะ "เยอะ" หรือ "OnDestroy ช้า"
                 try
                 {
                     var trAll = Resources.FindObjectsOfTypeAll<Transform>();
-                    var mbs = Resources.FindObjectsOfTypeAll<MonoBehaviour>();   // รวม inactive (pool) ด้วย
+                    var mbs = Resources.FindObjectsOfTypeAll<MonoBehaviour>();
                     int ps = UnityEngine.Object.FindObjectsOfType<ParticleSystem>().Length;
                     int rb = UnityEngine.Object.FindObjectsOfType<Rigidbody>().Length;
 
-                    // breakdown top MonoBehaviour type → รู้ว่าตัวไหน flood scene
                     var counts = new System.Collections.Generic.Dictionary<string, int>();
                     foreach (var m in mbs)
                     {
@@ -133,8 +127,8 @@ namespace MCPBridge
             }
             LogLine("PLAY", c + " · " + MemLine() + extra);
         }
-        static void OnQuit() => LogLine("QUIT", "ปิด Unity · " + MemLine());
-        static void OnBeforeReload() => LogLine("RELOAD", "ก่อน recompile · " + MemLine());
+        static void OnQuit() => LogLine("QUIT", "Unity closing · " + MemLine());
+        static void OnBeforeReload() => LogLine("RELOAD", "Before recompile · " + MemLine());
 
         static long _lastWorkingMB = -1;
         static bool _wasHigh;
@@ -162,22 +156,22 @@ namespace MCPBridge
                         if (!_wasStalled)
                         {
                             _wasStalled = true;
-                            LogLine("STALL", $"main thread ไม่ตอบ {sinceBeat / 1000}s (compile/import/freeze?) · ws={workingMB}MB · scene={_scene} · playing={_isPlaying} (ดู [MARK] ก่อนหน้าว่าค้างขั้นไหน)");
+                            LogLine("STALL", $"Main thread unresponsive for {sinceBeat / 1000}s (compile/import/freeze?) · ws={workingMB}MB · scene={_scene} · playing={_isPlaying} (inspect the preceding [MARK])");
                         }
                     }
                     else if (_wasStalled)
                     {
                         _wasStalled = false;
-                        LogLine("STALL", $"main thread กลับมาแล้ว (หยุดไป ~{STALL_MS / 1000}s+)");
+                        LogLine("STALL", $"Main thread recovered after ~{STALL_MS / 1000}s+");
                     }
 
                     if (_lastWorkingMB >= 0 && workingMB - _lastWorkingMB >= SPIKE_MB)
-                        LogLine("MEM-SPIKE", $"+{workingMB - _lastWorkingMB}MB ใน {POLL_MS / 1000.0:0.#}s → ws={workingMB}MB · scene={_scene} · playing={_isPlaying}");
+                        LogLine("MEM-SPIKE", $"+{workingMB - _lastWorkingMB}MB in {POLL_MS / 1000.0:0.#}s → ws={workingMB}MB · scene={_scene} · playing={_isPlaying}");
 
                     bool high = workingMB >= _memThresholdMB;
                     if (high && (!_wasHigh || now - _lastHighLogMs > 30000))
                     {
-                        LogLine("MEM-HIGH", $"ws={workingMB}MB (เกิน {_memThresholdMB}MB) · {MemLineBg()} · scene={_scene} · playing={_isPlaying}");
+                        LogLine("MEM-HIGH", $"ws={workingMB}MB (above {_memThresholdMB}MB) · {MemLineBg()} · scene={_scene} · playing={_isPlaying}");
                         _lastHighLogMs = now;
                     }
                     _wasHigh = high;
@@ -203,7 +197,6 @@ namespace MCPBridge
             return $"gcHeap={gc}MB";
         }
 
-        // ── log writer (open-write-close per call → ไม่ค้าง handle, ไฟล์เดียวกับ breadcrumb) ──
         static readonly object _logLock = new object();
 
         static void EnsureLogPath()
@@ -211,7 +204,7 @@ namespace MCPBridge
             if (_logPath != null) return;
             try
             {
-                string dir = Path.Combine(Application.dataPath, "..", "Library", "DeltaMCP");
+                string dir = Path.Combine(Application.dataPath, "..", "Library", "AIUnityMCPServer");
                 Directory.CreateDirectory(dir);
                 _logPath = Path.GetFullPath(Path.Combine(dir, "monitor.log"));
             }

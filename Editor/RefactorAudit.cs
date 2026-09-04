@@ -10,17 +10,14 @@ using UnityEngine;
 namespace MCPBridge
 {
     /// <summary>
-    /// RefactorAudit — สแกน .cs ทั้งโปรเจกต์ รายงาน refactoring opportunities
-    /// ใช้ regex + brace-matching เท่านั้น (ไม่ต้องพึ่ง Roslyn / full compiler)
     /// </summary>
     public static class RefactorAudit
     {
-        // ── Third-party folders ที่ข้าม (เหมือน IsThirdParty ใน MCPHandlers) ──
         static readonly string[] ThirdPartyParts =
         {
             "/Plugins/", "/ThirdParty/", "/PhotonFusion/", "/Photon/", "/PlayFab/",
             "/CBS/", "/TextMesh Pro/", "/Mirror/", "/PackageCache/", "/GPUInstancer/",
-            "/ProBuilder", "/Polybrush", "/MeshBaker/", "/NuGet/", "/UnityMCP/",
+            "/ProBuilder", "/Polybrush", "/MeshBaker/", "/NuGet/", "/AIUnityMCPServer/",
             "/PlayFabSDK/", "/StandaloneFileBrowser/", "/Hexasphere/", "/WorldMapStrategyKit/",
         };
 
@@ -66,7 +63,6 @@ namespace MCPBridge
             @"([A-Z]\w*(?:<[\w,\s<>]+>)?(?:\[\])*)\s+\w+\s*[;=,]",
             RegexOptions.Compiled);
 
-        // ── Types ที่ exclude ออกจาก dependency ────────────────────────────
         static readonly HashSet<string> CommonTypes = new HashSet<string>
         {
             "MonoBehaviour","NetworkBehaviour","ScriptableObject","Object","Component",
@@ -77,13 +73,11 @@ namespace MCPBridge
             "Static","Readonly","Event","Const","Override","Virtual","Extern",
         };
 
-        // ── Base classes ที่หยุด inheritance chain ───────────────────────────
         static readonly HashSet<string> StopBases = new HashSet<string>
         {
             "MonoBehaviour","NetworkBehaviour","ScriptableObject","Object","Component",
         };
 
-        // ── Keyword ที่ false-positive เป็น method ────────────────────────────
         static readonly HashSet<string> SkipKeywords = new HashSet<string>
         {
             "if","while","for","foreach","switch","catch","using","lock","when",
@@ -91,7 +85,6 @@ namespace MCPBridge
             "await","yield","select","where","orderby","group","join","from","into",
         };
 
-        // ── CsFileInfo — ข้อมูลหนึ่งไฟล์ ──────────────────────────────────────
         class CsFileInfo
         {
             public string Path;
@@ -132,7 +125,6 @@ namespace MCPBridge
             {
                 if (string.IsNullOrEmpty(dataPath)) dataPath = Application.dataPath;
 
-                // 1) ค้นหาไฟล์ .cs ทั้งหมด
                 var csFiles = Directory
                     .GetFiles(dataPath, "*.cs", SearchOption.AllDirectories)
                     .Select(f => f.Replace("\\", "/"))
@@ -148,7 +140,6 @@ namespace MCPBridge
 
                 var files = new List<CsFileInfo>();
 
-                // 2) Parse แต่ละไฟล์
                 foreach (var absPath in csFiles)
                 {
                     string relPath = "Assets" + absPath.Substring(dataPath.Replace("\\","/").Length);
@@ -158,13 +149,15 @@ namespace MCPBridge
                         var fi = ParseFile(relPath, content);
                         if (fi != null) files.Add(fi);
                     }
-                    catch { /* ข้ามไฟล์ที่อ่านไม่ได้ */ }
+                    catch (Exception exception)
+                    {
+                        Debug.LogWarning($"[AI Unity MCP Server] Could not inspect {relPath}: {exception.Message}");
+                    }
                 }
 
                 // 3) Cross-file analysis
                 ComputeCrossFile(files);
 
-                // 4) Score ทุกไฟล์
                 foreach (var fi in files)
                     ScoreFile(fi);
 
@@ -177,7 +170,6 @@ namespace MCPBridge
             }
         }
 
-        // ── Parse ไฟล์เดี่ยว ────────────────────────────────────────────────
         static CsFileInfo ParseFile(string relPath, string content)
         {
             var lines = content.Split('\n');
@@ -257,7 +249,6 @@ namespace MCPBridge
                     {
                         if (mm.Groups[1].Value == "0" || mm.Groups[1].Value == "1" ||
                             mm.Groups[1].Value == "-1" || mm.Groups[1].Value == "2") continue;
-                        // ข้ามในกลุ่ม string literal (ไม่สมบูรณ์แบบ แต่ดีพอ)
                         magicCount++;
                         if (magicCount >= 99) break;
                     }
@@ -336,7 +327,6 @@ namespace MCPBridge
                 string methodName = m.Groups[3].Value;
                 if (SkipKeywords.Contains(methodName)) continue;
 
-                // ต้องมี { ในบรรทัดเดียวกันหรือถัดไป (กัน abstract/interface declaration)
                 int braceStart = -1;
                 for (int look = i; look <= Math.Min(i + 3, lines.Length - 1); look++)
                 {
@@ -345,7 +335,6 @@ namespace MCPBridge
                 }
                 if (braceStart < 0) continue;
 
-                // Brace-match จาก braceStart
                 int depth = 0; bool started = false;
                 int startLine = braceStart;
                 int endLine = startLine;
@@ -393,7 +382,6 @@ namespace MCPBridge
             n += Regex.Matches(line, @"\bwhile\b").Count;
             n += Regex.Matches(line, @"\bcase\b").Count;
             n += Regex.Matches(line, @"\bcatch\b").Count;
-            // ternary ? (ไม่นับ ?. / ?? / generic type parameter)
             n += Regex.Matches(line, @"(?<![?<>\w])\?(?![?.\w])").Count;
             n += Regex.Matches(line, @"&&").Count;
             n += Regex.Matches(line, @"\|\|").Count;
@@ -413,7 +401,6 @@ namespace MCPBridge
             foreach (var fi in files)
                 fi.InheritanceDepth = ComputeDepth(fi, classMap, new HashSet<string>(), 0);
 
-            // Fan-in: count ไฟล์อื่นๆ ที่ reference class นี้
             foreach (var fi in files)
             {
                 int fanIn = 0;
@@ -425,7 +412,6 @@ namespace MCPBridge
                 fi.FanIn = fanIn;
             }
 
-            // Fan-out: จำนวน unique external types
             foreach (var fi in files)
                 fi.FanOut = fi.Dependencies.Count;
         }
@@ -495,44 +481,44 @@ namespace MCPBridge
 
             // Large class
             if (fi.LineCount > 500)
-                issues.Add($"Large class: {fi.LineCount} lines — แบ่งออกเป็น class ย่อย");
+                issues.Add($"Large class: {fi.LineCount} lines; split it into focused classes");
 
             // Long methods (top 3 by length)
             var longMethods = fi.Methods.Where(m => m.LineCount > 50)
                 .OrderByDescending(m => m.LineCount).Take(3);
             foreach (var m in longMethods)
-                issues.Add($"Long method: {m.Name}() {m.LineCount} lines — แตกเป็น method ย่อย");
+                issues.Add($"Long method: {m.Name}() {m.LineCount} lines; extract focused methods");
 
             // High complexity (top 3 by branch count)
             var complexMethods = fi.Methods.Where(m => m.BranchCount > 10)
                 .OrderByDescending(m => m.BranchCount).Take(3);
             foreach (var m in complexMethods)
-                issues.Add($"High complexity: {m.Name}() ~{m.BranchCount} branches — ยาก maintain/test");
+                issues.Add($"High complexity: {m.Name}() ~{m.BranchCount} branches; difficult to maintain and test");
 
             // Update methods
             var updateMethods = fi.Methods.Where(m => m.IsUpdate && m.LineCount > 20);
             foreach (var m in updateMethods)
-                issues.Add($"Update()/FixedUpdate() {m.LineCount} lines — ควร < 20 lines ใน game loop");
+                issues.Add($"Update()/FixedUpdate() {m.LineCount} lines; aim for fewer than 20 lines in the game loop");
 
             // Public fields
             if (fi.PublicFieldCount > 5)
-                issues.Add($"Public fields: {fi.PublicFieldCount} ตัว — ใช้ [SerializeField] private แทน");
+                issues.Add($"Public fields: {fi.PublicFieldCount}; prefer private fields with [SerializeField]");
 
             // Magic numbers
             if (fi.MagicNumberCount > 3)
-                issues.Add($"Magic numbers: {fi.MagicNumberCount} จุด — ใช้ const หรือ ScriptableObject แทน");
+                issues.Add($"Magic numbers: {fi.MagicNumberCount}; replace them with constants or ScriptableObject data");
 
             // Deep nesting
             if (fi.MaxNestingDepth > 5)
-                issues.Add($"Deep nesting: {fi.MaxNestingDepth} levels — ใช้ early return / guard clause");
+                issues.Add($"Deep nesting: {fi.MaxNestingDepth} levels; use early returns and guard clauses");
 
             // Inheritance depth
             if (fi.InheritanceDepth > 4)
-                issues.Add($"Inheritance depth: {fi.InheritanceDepth} — ลอง composition over inheritance");
+                issues.Add($"Inheritance depth: {fi.InheritanceDepth}; consider composition over inheritance");
 
             // No interface
             if (fi.IsMonoBehaviour && fi.Interfaces.Count == 0 && fi.LineCount > 200)
-                issues.Add("ไม่มี interface — ยาก mock/test/swap");
+                issues.Add("No interface; difficult to mock, test or replace");
 
             // Technical debt
             if (fi.TodoCount > 0)
@@ -623,7 +609,7 @@ namespace MCPBridge
             {
                 if (i > 0) sb.Append(",");
                 var fi = highFanIn[i];
-                sb.Append($"{{\"class\":\"{EJ(fi.ClassName)}\",\"fanIn\":{fi.FanIn},\"note\":\"{fi.FanIn} files depend — เปลี่ยนระวัง\"}}");
+                sb.Append($"{{\"class\":\"{EJ(fi.ClassName)}\",\"fanIn\":{fi.FanIn},\"note\":\"{fi.FanIn} files depend on this class; change it carefully\"}}");
             }
             sb.Append("],");
             sb.Append("\"highFanOut\":[");
@@ -631,7 +617,7 @@ namespace MCPBridge
             {
                 if (i > 0) sb.Append(",");
                 var fi = highFanOut[i];
-                sb.Append($"{{\"class\":\"{EJ(fi.ClassName)}\",\"fanOut\":{fi.FanOut},\"note\":\"depend on {fi.FanOut} types — coupled มาก\"}}");
+                sb.Append($"{{\"class\":\"{EJ(fi.ClassName)}\",\"fanOut\":{fi.FanOut},\"note\":\"depends on {fi.FanOut} types; highly coupled\"}}");
             }
             sb.Append("]},");
 
@@ -642,9 +628,9 @@ namespace MCPBridge
             {
                 var siIssues = new List<string>();
                 if (fi.InheritanceDepth > 3)
-                    siIssues.Add($"inheritance depth {fi.InheritanceDepth} — ลอง composition");
+                    siIssues.Add($"inheritance depth {fi.InheritanceDepth}; consider composition");
                 if (fi.IsMonoBehaviour && fi.Interfaces.Count == 0 && fi.LineCount > 200)
-                    siIssues.Add("ไม่มี interface — ยาก mock/test");
+                    siIssues.Add("no interface; difficult to mock or test");
                 if (siIssues.Count == 0) continue;
 
                 if (!firstSI) sb.Append(",");
@@ -663,7 +649,6 @@ namespace MCPBridge
             return sb.ToString();
         }
 
-        // ── EscapeJson alias (ใช้ EscapeJsonPublic ใน MCPHandlers) ──────────
         static string EJ(string s) => MCPHandlers.EscapeJsonPublic(s);
     }
 }

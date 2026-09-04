@@ -7,21 +7,17 @@ using UnityEngine;
 namespace MCPBridge
 {
     /// <summary>
-    /// ดึงรูปจาก Windows clipboard (กรณีกด Ctrl+V หรือ Print Screen แล้วยังไม่ได้เซฟไฟล์)
-    /// Unity ไม่รองรับ image clipboard ในตัว เลยเรียก PowerShell ดึง System.Windows.Forms.Clipboard
     /// </summary>
     public static class ClipboardImage
     {
         /// <summary>
-        /// ถ้า clipboard มีรูป → เซฟเป็น PNG ชั่วคราว คืน path
-        /// ถ้าไม่มีรูป (เป็น text หรือว่าง) → คืน null
         /// </summary>
         public static string TryGetImagePath()
         {
             if (Application.platform != RuntimePlatform.WindowsEditor)
                 return null;
 
-            string tmp = Path.Combine(Path.GetTempPath(), $"delta_paste_{Guid.NewGuid():N}.png").Replace("\\", "/");
+            string tmp = Path.Combine(Path.GetTempPath(), $"AIUnityMCPServer_paste_{Guid.NewGuid():N}.png").Replace("\\", "/");
 
             string script =
                 "Add-Type -AssemblyName System.Windows.Forms;" +

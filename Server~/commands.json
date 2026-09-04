@@ -1,10 +1,10 @@
 {
-  "_note": "SINGLE SOURCE ของ Unity MCP commands — bridge (index.js) และ Unity C# (MCPHandlers.cs) อ่านไฟล์นี้ร่วมกัน. เพิ่ม/แก้ tool ที่นี่ที่เดียว. instance-management tools (unity_list_instances/select/start) เป็น local logic ไม่อยู่ในนี้ — hardcode ใน index.js.",
+  "_note": "SINGLE SOURCE for Unity MCP commands. The Node bridge (index.js) and Unity dispatcher (MCPHandlers.cs) both read this file. Add or edit manifest tools here only. Instance-management tools are local logic defined in index.js.",
   "commands": [
     { "tool": "unity_ping", "command": "ping", "path": "/ping", "description": "Check Unity Editor connection (active/selected instance)", "params": {} },
     { "tool": "unity_compile", "command": "compile", "path": "/compile", "description": "Trigger Unity AssetDatabase.Refresh + RequestScriptCompilation — use after writing new scripts so Unity detects and compiles them without manual interaction", "params": {} },
     { "tool": "unity_compile_status", "command": "compile_status", "path": "/compile-status", "description": "Check if Unity is still compiling scripts. Returns {isCompiling, status}. Poll this after unity_compile until isCompiling=false before calling unity_add_component or any type-dependent command.", "params": {} },
-    { "tool": "unity_server_stop", "command": "server_stop", "path": "/server/stop", "description": "Stop the Unity MCP server (TcpListener) from the AI side — used by /unity-mcp-close to fully close MCP. The server stops after this response flushes, so a subsequent unity_ping failing means stop succeeded.", "params": {} },
+    { "tool": "unity_server_stop", "command": "server_stop", "path": "/server/stop", "description": "Stop AI Unity MCP Server (TcpListener) from the AI side — used by /unity-mcp-close to fully close MCP. The server stops after this response flushes, so a subsequent unity_ping failing means stop succeeded.", "params": {} },
     { "tool": "unity_optimize_ui", "command": "optimize_ui", "path": "/ui/optimize", "description": "Optimize UI in the active scene: disable raycastTarget on non-interactive Image/Text, disable pixelPerfect on Canvas, warn about heavy LayoutGroups. Requires Write ON.", "params": {} },
     { "tool": "unity_scene_list", "command": "scene_list", "path": "/scene/list", "description": "List all scenes in the project", "params": {} },
     { "tool": "unity_scene_hierarchy", "command": "scene_hierarchy", "path": "/scene/hierarchy", "description": "Get current scene hierarchy", "params": {} },
@@ -219,7 +219,7 @@
       "width": { "type": "number", "opt": true, "default": 1280, "desc": "Output width (64..4096); ignored when overlay=true" },
       "height": { "type": "number", "opt": true, "default": 720, "desc": "Output height (64..4096); ignored when overlay=true" },
       "overlay": { "type": "boolean", "opt": true, "default": false, "desc": "Play-only: capture the real backbuffer incl. Screen-Space-Overlay UI (at screen res)" },
-      "path": { "type": "string", "opt": true, "desc": "Custom output path (Assets/... or absolute); default Library/DeltaMCP/screenshots/" },
+      "path": { "type": "string", "opt": true, "desc": "Custom output path (Assets/... or absolute); default Library/AIUnityMCPServer/screenshots/" },
       "base64": { "type": "boolean", "opt": true, "default": false, "desc": "Also embed the PNG as base64 in the JSON (capped ~3MB); the bridge already returns the image regardless" }
     } },
     { "tool": "unity_build_player", "command": "build_player", "path": "/build/player", "timeoutMs": 600000, "noRetry": true, "description": "Build a standalone/mobile player via BuildPipeline. Blocking and can take minutes (the bridge may time out while the build continues). Uses enabled Build Settings scenes unless 'scenes' is given. Switches the active build target if needed. Requires Write ON.", "params": {

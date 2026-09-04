@@ -1,4 +1,4 @@
-// MCPChatWindow — MCP Bridge chat UI
+// MCPChatWindow — AI Unity MCP Server chat UI
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -10,16 +10,14 @@ namespace MCPBridge
 {
     public class MCPChatWindow : EditorWindow
     {
-        // ── Per-tab sessions (0 = API, 1 = CLI) — แยก state คนละ tab ──────────
         [SerializeField] ChatSession _api = new ChatSession();
         [SerializeField] ChatSession _cli = new ChatSession();
 
         ChatSession S => CurrentBackend() == 0 ? _api : _cli;
 
-        // ── Shared UI-only state (ไม่ผูกกับ tab) ─────────────────────────────
         string _apiKey = "";
         bool _showSettings;
-        int _lastRole = -1;   // ตรวจ role change → invalidate message cache
+        int _lastRole = -1;
         Vector2 _inputScroll;
         bool _autoScroll = true;
 
@@ -27,39 +25,31 @@ namespace MCPBridge
         string _scriptQuery = "";
         Vector2 _scriptScroll;
 
-        // '#' prefab picker (autocomplete ชื่อ prefab — แยกจาก '@' ที่เป็น script)
         bool _showPrefabList;
         string _prefabQuery = "";
         Vector2 _prefabScroll;
 
-        // '/' skill picker (เฉพาะ Subscription/CLI mode)
         bool _showSkillList;
         string _skillQuery = "";
         Vector2 _skillScroll;
 
-        int _caretToEndFrames;   // นับถอยหลังย้าย caret ไปท้ายช่องพิมพ์ หลัง refocus (กัน select-all)
-        bool _showLive;     // แผง Profiler สด (real-time)
+        int _caretToEndFrames;
+        bool _showLive;
         double _lastLiveRepaint;
-        double _lastThinkRepaint;   // throttle repaint ตอน "กำลังคิด" (กันแย่ง frame เกม)
-        bool _showKeywords; // แผง Dev/Art keyword shortcuts
-        bool _showWatch;    // แผง 👁 Watch — ดูค่า field สดตอนเล่น
-        string _watchField = "";   // ช่องพิมพ์ field สำหรับ quick-add ใน Watch panel
+        double _lastThinkRepaint;
+        bool _showKeywords;
+        bool _showWatch;
+        string _watchField = "";
         double _lastWatchRepaint;
 
-        // Tab ที่ 3 — MCP Log
-        [SerializeField] int _activeTab;   // 0=API, 1=CLI, 2=MCPLog (แยกจาก backend)
+        [SerializeField] int _activeTab;
         Vector2 _logScroll;
 
-        // cache GUIStyles (สร้างครั้งเดียว ไม่ใช่ทุกข้อความทุกเฟรม)
         GUIStyle _msgTextStyle, _roleUser, _roleClaude;
         Font _logFont;
         Font LogFont => _logFont != null ? _logFont
             : (_logFont = Font.CreateDynamicFontFromOSFont(
                 new[] { "Consolas", "Menlo", "Courier New", "monospace" }, FONT_SIZE - 1));
-        // ฟอนต์เนื้อความ — bundle IBM Plex Sans Thai Looped (OFL) มากับ package ทุกเครื่องเห็นเหมือนกัน
-        // หาไฟล์ด้วย "ชื่อ asset" (AssetDatabase.FindAssets) แทน hardcode path → โหลดได้ทั้งตอน embed
-        // ใน Assets/ และตอนเป็น UPM package (Packages/com.mcpbridge/...) — path เปลี่ยนตามที่ติดตั้ง
-        // fallback OS: Segoe UI Variable / Inter (modern sans) → Leelawadee UI (ไทย) → Thonburi (mac)
         const string UI_FONT_NAME = "IBMPlexSansThaiLooped";
         Font _uiFont;
         Font UiFont
@@ -79,7 +69,6 @@ namespace MCPBridge
             }
         }
 
-        // วาด sparkline (bar) จาก history ตัวเลข — โชว์ "รูปทรงการเปลี่ยน" ในแผง Watch
         static void DrawSparkline(Rect r, string[] hist, Color col)
         {
             if (Event.current.type != EventType.Repaint || hist == null || hist.Length < 2) return;
@@ -90,7 +79,7 @@ namespace MCPBridge
                 if (float.TryParse(hist[i], out float f)) { nums[i] = f; mn = Mathf.Min(mn, f); mx = Mathf.Max(mx, f); finite++; }
                 else nums[i] = float.NaN;
             }
-            if (finite < 2) return;   // ไม่ใช่ตัวเลข (เช่น state name) → ไม่วาด
+            if (finite < 2) return;
             float range = Mathf.Approximately(mx, mn) ? 1f : (mx - mn);
             float bw = r.width / hist.Length;
             var c = new Color(col.r, col.g, col.b, 0.55f);
@@ -103,11 +92,9 @@ namespace MCPBridge
             }
         }
 
-        // ตัดสตริงยาว + ใส่ … (ใช้ใน Watch panel กันแถวล้น)
         static string Trunc(string s, int max) =>
             string.IsNullOrEmpty(s) ? "" : (s.Length > max ? s.Substring(0, max) + "…" : s);
 
-        // format เวลา: <60 วิ = "20s", >=60 = "1m 01s" (ไม่มีเศษ)
         static string FmtTime(double sec)
         {
             int s = (int)sec;
@@ -118,14 +105,14 @@ namespace MCPBridge
         // smooth scroll
         float _scrollTarget = -1f;
         bool _scrollAnim;
-        bool _stickBottom = true;   // ตามข้อความใหม่ เฉพาะตอนอยู่ล่างสุด
-        const string THINKING = "\x02THINKING";   // marker ของ bubble "กำลังคิด" (render เวลาสด)
-        const string QUEUED   = "\x03QUEUED";     // marker ของ bubble "รอคิว" (ยกเลิกได้)
+        bool _stickBottom = true;
+        const string THINKING = "\x02THINKING";
+        const string QUEUED   = "\x03QUEUED";
 
         const int MAX_IMAGES = 8;
-        const int FONT_SIZE = 12;   // ฟอนต์ chrome (header/tab/ปุ่ม)
-        const int MSG_FONT  = 14;   // ฟอนต์เนื้อความ (อ่านง่าย คมขึ้น)
-        const int SCRIPT_LIST_HEIGHT = 162;   // picker panel (@/#//) — 5 แถว + หัว
+        const int FONT_SIZE = 12;
+        const int MSG_FONT  = 14;
+        const int SCRIPT_LIST_HEIGHT = 162;
         const float INPUT_MIN = 40f;
         const float INPUT_MAX = 160f;
         float _inputHeight = INPUT_MIN;
@@ -157,7 +144,6 @@ namespace MCPBridge
             GUI.DrawTexture(r, Texture2D.whiteTexture, ScaleMode.StretchToFill, true, 0f, c,
                 Vector4.zero, new Vector4(tl, tr, br, bl));
         }
-        // กล่องมุมโค้ง + เส้นขอบ 1px (ชัวร์: 2 rect ซ้อน ไม่พึ่ง border semantics)
         static void RBox(Rect r, Color fill, Color border, float radius)
         {
             RRect(r, border, radius);
@@ -170,7 +156,6 @@ namespace MCPBridge
             GUI.Label(r, text, st);
         }
 
-        // ไอคอนส้ม ✦ บน dock tab — gen เป็น texture ในโค้ด (ไม่ต้องมีไฟล์ asset)
         static Texture2D _tabIcon;
         static Texture2D TabIcon()
         {
@@ -183,11 +168,9 @@ namespace MCPBridge
             for (int x = 0; x < S; x++)
             {
                 float dx = x - c, dy = y - c;
-                // rounded square (SDF มุมโค้ง)
                 float qx = Mathf.Max(Mathf.Abs(dx) - (half - corner), 0f);
                 float qy = Mathf.Max(Mathf.Abs(dy) - (half - corner), 0f);
                 bool inBg = Mathf.Sqrt(qx * qx + qy * qy) <= corner;
-                // ดาว 4 แฉก (astroid): (|x|/r)^(2/3) + (|y|/r)^(2/3) <= 1
                 float a = Mathf.Pow(Mathf.Abs(dx) / star, 2f / 3f) + Mathf.Pow(Mathf.Abs(dy) / star, 2f / 3f);
                 t.SetPixel(x, S - 1 - y, !inBg ? Color.clear : (a <= 1f ? Color.white : ACCENT));
             }
@@ -196,40 +179,35 @@ namespace MCPBridge
         }
 
         // ── Open ──────────────────────────────────────────────────────────
-        [MenuItem("MCP Bridge/Chat _F12")]
-        public static void Open() => GetWindow<MCPChatWindow>("MCP Bridge").minSize = new Vector2(440, 600);
+        [MenuItem("AI Unity MCP Server/Chat _F12")]
+        public static void Open() => GetWindow<MCPChatWindow>("AI Unity MCP Server").minSize = new Vector2(440, 600);
 
         void OnEnable()
         {
-            titleContent = new GUIContent("MCP Bridge", TabIcon());   // ไอคอนส้มบน dock tab
-            wantsMouseMove = true;   // ให้ hover effect ใน custom dropdown/ปุ่ม ตอบสนองทันที
-            _apiKey = EditorPrefs.GetString("DeltaMCP_ApiKey", "");
+            titleContent = new GUIContent("AI Unity MCP Server", TabIcon());
+            wantsMouseMove = true;
+            _apiKey = EditorPrefs.GetString("AIUnityMCPServer_ApiKey", "");
             _api.backend = 0;
             _cli.backend = 1;
-            // NonSerialized fields อาจเป็น null หลัง domain reload — init ใหม่
             _api.Reinit(); _cli.Reinit();
             if (_api.messages.Count == 0) LoadHistory(_api);
             if (_cli.messages.Count == 0) LoadHistory(_cli);
-            // bubble "กำลังคิด/รอคิว" ที่รอดข้าม domain reload = ซาก (task ตายไปกับ reload แล้ว) → ลบทิ้ง
             CleanupStalePlaceholders(_api);
             CleanupStalePlaceholders(_cli);
             CodebaseIndex.Refresh();
             SkillIndex.Refresh();
-            PrefabIndex.RefreshAsync();   // A2: build reverse-index (script→prefab) บน background thread
+            PrefabIndex.RefreshAsync();
         }
 
         void OnDisable() { SaveHistory(_api); SaveHistory(_cli); }
 
-        // อัพเดทหน้าต่าง ~10/วิ ตอน CpuDeepCapture จับอยู่ → ปุ่ม ⏺ % เดินจนเสร็จ + แนบผลทันที
         void OnInspectorUpdate() { if (CpuDeepCapture.IsCapturing) Repaint(); }
 
-        // ── persistence (แยกประวัติตาม backend) ──────────────────────────────
-        static int CurrentBackend() => EditorPrefs.GetInt("DeltaMCP_Backend", 0);
+        static int CurrentBackend() => EditorPrefs.GetInt("AIUnityMCPServer_Backend", 0);
 
-        // เก็บใน Library/DeltaMCP/ (ไม่มี size limit, ไม่ถูก git track, อยู่รอดผ่าน domain reload)
         static string HistoryPath(int backend)
         {
-            string dir = System.IO.Path.Combine(Application.dataPath, "..", "Library", "DeltaMCP");
+            string dir = System.IO.Path.Combine(Application.dataPath, "..", "Library", "AIUnityMCPServer");
             System.IO.Directory.CreateDirectory(dir);
             return System.IO.Path.Combine(dir, $"chat_{backend}.json");
         }
@@ -240,19 +218,17 @@ namespace MCPBridge
         {
             try
             {
-                // ไม่เซฟ placeholder "กำลังคิด/รอคิว" ลงไฟล์ — โหลดกลับมาก็เป็นซากที่ทำต่อไม่ได้อยู่ดี
                 var keep = s.messages.FindAll(m => !(m.Role == "assistant" && (m.Content == THINKING || m.Content == QUEUED)));
                 System.IO.File.WriteAllText(HistoryPath(s.backend), JsonUtility.ToJson(new HistoryWrap { items = keep }));
             }
             catch { }
         }
 
-        // ลบ bubble "กำลังคิด/รอคิว" ที่ค้างหลัง domain reload (เช่น recompile กลางคัน — งานโดนตัดแล้วแน่นอน)
         static void CleanupStalePlaceholders(ChatSession s)
         {
             int removed = s.messages.RemoveAll(m => m.Role == "assistant" && (m.Content == THINKING || m.Content == QUEUED));
             if (removed > 0)
-                Debug.Log($"[MCP Bridge] ลบ bubble 'กำลังคิด' ค้าง {removed} อัน (โดนตัดตอน compile/reload) — พิมพ์ถามใหม่ได้เลย");
+                Debug.Log($"[AI Unity MCP Server] Removed {removed} stale thinking bubbles interrupted by compilation or reload. Submit the request again.");
         }
 
         void LoadHistory(ChatSession s)
@@ -262,14 +238,12 @@ namespace MCPBridge
                 string path = HistoryPath(s.backend);
                 string json = System.IO.File.Exists(path) ? System.IO.File.ReadAllText(path) : "";
 
-                // migrate จาก EditorPrefs เดิม (ถ้าไม่มีไฟล์ให้ลองโหลดจาก EditorPrefs ก่อน)
                 if (string.IsNullOrEmpty(json))
-                    json = EditorPrefs.GetString($"DeltaMCP_ChatHistory_{s.backend}", "");
+                    json = EditorPrefs.GetString($"AIUnityMCPServer_ChatHistory_{s.backend}", "");
 
                 var wrap = string.IsNullOrEmpty(json) ? null : JsonUtility.FromJson<HistoryWrap>(json);
                 s.messages = wrap?.items ?? new List<ChatMessage>();
                 s.messages.RemoveAll(m => string.IsNullOrEmpty(m.Role) || m.Content == null);
-                // migrate: ข้อความเก่าที่ฝัง ⏱ ในเนื้อหา → ย้ายไป Stat
                 foreach (var m in s.messages)
                 {
                     if (m.Role == "user" || !string.IsNullOrEmpty(m.Stat)) continue;
@@ -283,19 +257,17 @@ namespace MCPBridge
         void SwitchBackend(int target)
         {
             if (target == CurrentBackend()) return;
-            EditorPrefs.SetInt("DeltaMCP_Backend", target);
+            EditorPrefs.SetInt("AIUnityMCPServer_Backend", target);
             _showScriptList = false;
             GUI.FocusControl(null);
         }
 
-        // คิวงานที่ต้องแก้ messages — apply เฉพาะตอน Layout (กัน control count เพี้ยนระหว่าง Layout/Repaint)
         readonly Queue<System.Action> _pending = new Queue<System.Action>();
-        bool _refocusInput;   // true = ต้องดึง focus กลับช่อง prompt (ข้อความใหม่ทำให้หลุด)
+        bool _refocusInput;
 
         // ── GUI ───────────────────────────────────────────────────────────
         void OnGUI()
         {
-            // ตรวจ role change → invalidate cached views ทุก message (ไม่งั้น bubble เก่าค้างอยู่)
             int curRoleNow = CurrentRole();
             if (curRoleNow != _lastRole)
             {
@@ -304,11 +276,8 @@ namespace MCPBridge
                 foreach (var m in _cli.messages) m.InvalidateCaches();
             }
 
-            // apply การเปลี่ยน messages ตอน Layout เท่านั้น → Layout กับ Repaint เห็นโครงสร้างเดียวกัน
             if (Event.current.type == EventType.Layout && _pending.Count > 0)
             {
-                // ถ้ากำลังพิมอยู่ในช่อง prompt → จำไว้ว่าต้อง re-focus หลังเพิ่มข้อความ
-                // (ข้อความใหม่ทำให้ control id เลื่อน → keyboard focus หลุด ถ้าไม่ดึงกลับ)
                 bool wasTyping = GUI.GetNameOfFocusedControl() == "PromptField";
                 while (_pending.Count > 0) _pending.Dequeue()?.Invoke();
                 if (wasTyping) _refocusInput = true;
@@ -316,19 +285,15 @@ namespace MCPBridge
 
             EditorGUI.DrawRect(new Rect(0, 0, position.width, position.height), BG_DARK);
 
-            // hover effect เฉพาะหน้า Settings + ตอน picker (@/#//) เปิด — โซนอื่นเมาส์ขยับ = ไม่ repaint เลย
-            // (repaint รัวบน transcript ยาวๆ คือต้นเหตุ Unity ค้างจนขึ้น "Hold on... MCPChatWindow.MouseDown")
             if ((_showSettings || _showScriptList || _showPrefabList || _showSkillList) &&
                 Event.current.type == EventType.MouseMove)
                 Repaint();
 
-            DrawTabs();   // แถวบนแถวเดียว: tab pills ซ้าย + role/online/⚙ ชิดขวา
-            // เส้นคั่นใต้แถวบน — แยกโซน chrome กับเนื้อหา (กัน tab กลืนกับ message)
+            DrawTabs();
             var tabSep = GUILayoutUtility.GetRect(0, 1, GUILayout.ExpandWidth(true));
             if (Event.current.type == EventType.Repaint) EditorGUI.DrawRect(tabSep, BORDER_SOFT);
             EditorGUILayout.Space(6);
 
-            // compile อยู่ → โชว์ loading card กลางหน้าต่างแทนทั้งหน้า (แชตพักชั่วคราว draft ไม่หาย)
             if (EditorApplication.isCompiling)
             {
                 DrawCompilingOverlay();
@@ -342,15 +307,13 @@ namespace MCPBridge
             DrawChatHistory();
             DrawInputArea();
 
-            // ดึง focus กลับช่อง prompt ถ้าข้อความใหม่เพิ่งทำให้หลุด (ตอนผู้ใช้กำลังพิม)
             if (_refocusInput && Event.current.type == EventType.Repaint)
             {
                 EditorGUI.FocusTextInControl("PromptField");
                 _refocusInput = false;
-                _caretToEndFrames = 2;   // focus กลับมา Unity จะ select-all → ต้องย้าย caret ตาม
+                _caretToEndFrames = 2;
                 Repaint();
             }
-            // ฆ่า select-all หลัง focus จับ: ย้าย caret ไปท้ายข้อความ (ไม่งั้นพิมพ์ตัวแรก = ลบทั้งช่อง)
             if (_caretToEndFrames > 0 && Event.current.type == EventType.Repaint)
             {
                 if (GUI.GetNameOfFocusedControl() == "PromptField")
@@ -378,7 +341,6 @@ namespace MCPBridge
 
             if (_activeTab < 2 && _activeTab != backend) _activeTab = backend;
 
-            // ── compact segmented pill tabs (ชิดซ้าย กระชับตาม label เหมือน mockup) ──
             var barR = EditorGUILayout.GetControlRect(false, 38, GUILayout.ExpandWidth(true));
 
             var lblStyle = new GUIStyle(EditorStyles.label)
@@ -387,13 +349,13 @@ namespace MCPBridge
                 alignment = TextAnchor.MiddleCenter,
             };
 
-            const float SEG_PAD = 18f;   // ระยะซ้าย-ขวาในแต่ละ pill
-            const float TRK_PAD = 4f;    // ขอบใน track
+            const float SEG_PAD = 18f;
+            const float TRK_PAD = 4f;
             var segW = new float[labels.Length];
             float totalW = 0f;
             for (int i = 0; i < labels.Length; i++)
             {
-                lblStyle.fontStyle = FontStyle.Bold;   // วัดด้วย bold (active กว้างสุด) กัน label ขยับตอนสลับ
+                lblStyle.fontStyle = FontStyle.Bold;
                 segW[i] = Mathf.Ceil(lblStyle.CalcSize(new GUIContent(labels[i])).x) + SEG_PAD * 2;
                 totalW += segW[i];
             }
@@ -424,7 +386,6 @@ namespace MCPBridge
                 sx += segW[ti];
             }
 
-            // ── ชิดขวาแถวเดียวกัน: role chip · online · ⚙ (ย้ายมาจาก header เดิม) ──
             bool srvOn2     = MCPServer.IsRunning;
             bool onClaudeIn = _activeTab == 2;
             float rightX = barR.xMax - 12;
@@ -448,7 +409,6 @@ namespace MCPBridge
                 rightX -= pw + 10;
             }
 
-            // role chip — คลิก = สลับ Dev↔Art ตรงๆ (เลิก GenericMenu ที่หน้าตาไม่เข้าธีม)
             if (!onClaudeIn)
             {
                 int curRole = CurrentRole();
@@ -465,28 +425,24 @@ namespace MCPBridge
                 if (GUI.Button(roleR, GUIContent.none, GUIStyle.none))
                 {
                     int newRole = curRole == 0 ? 1 : 0;
-                    EditorPrefs.SetInt("DeltaMCP_Role", newRole);
-                    // ล้าง cache view ทันที — เนื้อหา role เก่าไม่ค้าง (ไม่ต้องรอสลับ tab)
+                    EditorPrefs.SetInt("AIUnityMCPServer_Role", newRole);
                     foreach (var m in _api.messages) m.InvalidateCaches();
                     foreach (var m in _cli.messages) m.InvalidateCaches();
                     _lastRole = newRole;
                     Repaint();
-                    // abort เฟรมนี้ → Unity เริ่ม Layout+Repaint ใหม่ด้วย role ใหม่ (กัน rect เก่า/เนื้อใหม่ ปนกันจนเอ๋อ)
                     GUIUtility.ExitGUI();
                 }
                 rightX -= 76;
 
-                // 🧪 ทดสอบ — health check MCP (ตอบทันทีในแชต ไม่เรียก AI)
                 var testR = new Rect(rightX - 78, barR.y + 8, 78, 22);
                 RBox(testR, BG_RAISED, BORDER, 8f);
                 var testTxt = new GUIStyle(EditorStyles.label) { alignment = TextAnchor.MiddleCenter, fontSize = FONT_SIZE - 2 };
                 testTxt.normal.textColor = ONLINE;
-                GUI.Label(testR, "🧪 ทดสอบ", testTxt);
+                GUI.Label(testR, "🧪 Test", testTxt);
                 if (GUI.Button(testR, GUIContent.none, GUIStyle.none))
                 {
-                    S.draft = "ทดสอบ";
+                    S.draft = "test";
                     Enqueue();
-                    // เพิ่ม message กลางเฟรม (ก่อน history วาด) → ตัดเฟรมเริ่มใหม่ กัน Invalid GUILayout state
                     GUIUtility.ExitGUI();
                 }
             }
@@ -494,15 +450,13 @@ namespace MCPBridge
             if (picked != _activeTab)
             {
                 _activeTab = picked;
-                _showSettings = false;   // คลิก tab ขณะอยู่หน้า Settings = ปิด Settings กลับ tab นั้น
+                _showSettings = false;
                 if (picked < 2) SwitchBackend(picked);
-                // ExitGUI: abort OnGUI ปัจจุบัน → Unity เริ่ม Layout+Repaint ใหม่ด้วย _activeTab ที่ update แล้ว
-                // ป้องกัน "Invalid GUILayout state" เพราะ render control ต่างกันตาม _activeTab
                 GUIUtility.ExitGUI();
             }
         }
 
-        public static int CurrentRole() => EditorPrefs.GetInt("DeltaMCP_Role", 0);
+        public static int CurrentRole() => EditorPrefs.GetInt("AIUnityMCPServer_Role", 0);
 
         // ── Tab 3 (index 2): MCP Log + Server controls ────────────────────────
         void DrawMcpLog()
@@ -554,11 +508,10 @@ namespace MCPBridge
             {
                 EditorGUILayout.Space(20);
                 var empty = new GUIStyle(EditorStyles.centeredGreyMiniLabel) { fontSize = FONT_SIZE };
-                GUILayout.Label("ยังไม่มีคำสั่ง — เริ่ม chat แล้วสั่ง Claude ทำงานกับ Unity ก่อน", empty);
+                GUILayout.Label("No commands yet. Start a chat and ask Claude to work with Unity.", empty);
                 return;
             }
 
-            // ── styles: เวลา/ms = mono (Consolas) · ชื่อคำสั่ง = UI font (อ่านไทยชัด) ──
             var timeStyle = new GUIStyle(EditorStyles.miniLabel)
                 { font = LogFont, fontSize = FONT_SIZE - 2 };
             timeStyle.normal.textColor = TEXT_MUTE;
@@ -582,10 +535,8 @@ namespace MCPBridge
             var msStyle = new GUIStyle(EditorStyles.miniLabel)
                 { font = LogFont, fontSize = FONT_SIZE - 2 };
 
-            // ไม่โชว์ scrollbar — เลื่อนด้วย wheel (เนื้อหาเกินจอก็ scroll ได้ปกติ)
             _logScroll = EditorGUILayout.BeginScrollView(_logScroll, false, false, GUIStyle.none, GUIStyle.none, GUIStyle.none);
 
-            // แสดงจากใหม่ → เก่า  (snapshot กัน lock ค้างระหว่าง draw)
             List<MCPHandlers.MCPLogEntry> snapshot;
             lock (log) { snapshot = new List<MCPHandlers.MCPLogEntry>(log); }
 
@@ -596,7 +547,6 @@ namespace MCPBridge
                 Color accent  = e.IsError ? DANGER : ACCENT;
                 Color respCol = e.IsError ? DANGER    : ONLINE;
 
-                // ── header row (คลิก = toggle expand) — การ์ดมุมโค้ง อ่านง่าย ──
                 var hdrFull = GUILayoutUtility.GetRect(0, 27, GUILayout.ExpandWidth(true));
                 var hdr = new Rect(hdrFull.x + 6, hdrFull.y, hdrFull.width - 12, 25);
                 if (Event.current.type == EventType.Repaint)
@@ -627,7 +577,6 @@ namespace MCPBridge
                     EditorGUILayout.BeginVertical();
                     GUILayout.Space(2);
 
-                    // raw path (เล็กๆ สีจาง)
                     var rawStyle = new GUIStyle(EditorStyles.miniLabel) { fontSize = FONT_SIZE - 3 };
                     rawStyle.normal.textColor = TEXT_HINT;
                     EditorGUILayout.BeginHorizontal();
@@ -660,54 +609,53 @@ namespace MCPBridge
                     EditorGUILayout.EndVertical();
                 }
 
-                EditorGUILayout.Space(3);   // ช่องว่างระหว่างการ์ด (แทนเส้น divider)
+                EditorGUILayout.Space(3);
             }
 
             EditorGUILayout.EndScrollView();
         }
 
-        // แปลง MCP path → ชื่อที่คนอ่านได้ + icon
         static string FriendlyPath(string path) => path switch
         {
             "/ping"                    => "🔌  Ping Unity",
             "/compile"                 => "⚙️  Compile Scripts",
-            "/compile-status"          => "⚙️  เช็คสถานะ Compile",
-            "/server/stop"             => "⏹  ปิด MCP Server",
-            "/atlas/create"            => "🖼  สร้าง Sprite Atlas",
-            "/diagnose/exceptions-clear" => "🚨  ล้าง Exceptions",
-            "/gameobject/create"       => "➕  สร้าง GameObject",
-            "/gameobject/delete"       => "🗑  ลบ GameObject",
+            "/compile-status"          => "⚙️  Check Compile Status",
+            "/server/stop"             => "⏹  Stop AI Unity MCP Server",
+            "/atlas/create"            => "🖼  Create Sprite Atlas",
+            "/diagnose/exceptions-clear" => "🚨  Clear Exceptions",
+            "/gameobject/create"       => "➕  Create GameObject",
+            "/gameobject/delete"       => "🗑  Delete GameObject",
             "/object/add-component"    => "🧩  Add Component",
             "/object/set-property"     => "✏️  Set Property",
             "/object/set-transform"    => "📐  Set Transform",
             "/object/inspect"          => "🔍  Inspect Object",
-            "/scene/hierarchy"         => "🌳  อ่าน Scene Hierarchy",
+            "/scene/hierarchy"         => "🌳  Read Scene Hierarchy",
             "/scene/list"              => "📋  List Scenes",
-            "/scene/open"              => "📂  เปิด Scene",
-            "/scene/save"              => "💾  บันทึก Scene",
-            "/scene/count"             => "🔢  นับ Components",
-            "/prefab/create"           => "📦  สร้าง Prefab",
-            "/prefab/place"            => "📌  วาง Prefab",
-            "/script/create"           => "📝  สร้าง Script",
-            "/script/read"             => "📖  อ่าน Script",
+            "/scene/open"              => "📂  Open Scene",
+            "/scene/save"              => "💾  Save Scene",
+            "/scene/count"             => "🔢  Count Components",
+            "/prefab/create"           => "📦  Create Prefab",
+            "/prefab/place"            => "📌  Place Prefab",
+            "/script/create"           => "📝  Create Script",
+            "/script/read"             => "📖  Read Script",
             "/code/run"                => "⚡  Run C# (live)",
-            "/ui/create"               => "🖼  สร้าง UI",
+            "/ui/create"               => "🖼  Create UI",
             "/ui/optimize"             => "⚡  Optimize UI",
-            "/material/create"         => "🎨  สร้าง Material",
-            "/terrain/create"          => "🏔  สร้าง Terrain",
-            "/terrain/set-heights"     => "🏔  ตั้งค่า Terrain",
-            "/asset/find"              => "🔎  ค้นหา Asset",
-            "/console/read"            => "📟  อ่าน Console",
-            "/console/logfile"         => "📄  อ่าน Log File",
-            "/console/clear"           => "🧹  ล้าง Console",
-            "/console/logs"            => "📟  ดึง Logs",
+            "/material/create"         => "🎨  Create Material",
+            "/terrain/create"          => "🏔  Create Terrain",
+            "/terrain/set-heights"     => "🏔  Set Terrain Heights",
+            "/asset/find"              => "🔎  Find Asset",
+            "/console/read"            => "📟  Read Console",
+            "/console/logfile"         => "📄  Read Log File",
+            "/console/clear"           => "🧹  Clear Console",
+            "/console/logs"            => "📟  Fetch Logs",
             "/perf/audit"              => "📊  Perf Audit",
             "/perf/worst"              => "📊  Worst Frames",
             "/diagnose/state"          => "🩺  Capture State",
             "/diagnose/deep"           => "🔬  Deep Diagnose",
             "/diagnose/memory"         => "💾  Memory Snapshot",
             "/diagnose/fusion"         => "🌐  Fusion Stats",
-            "/diagnose/exceptions"     => "🚨  อ่าน Exceptions",
+            "/diagnose/exceptions"     => "🚨  Read Exceptions",
             "/hot-reload"              => "🔥  Hot Reload",
             "/play/control"            => "▶️  Play Control",
             "/selection/get"           => "🖱  Get Selection",
@@ -722,10 +670,9 @@ namespace MCPBridge
             _                          => path   // fallback = raw path
         };
 
-        // แปลง JSON → tree ที่อ่านง่าย (recursive — object/array ซ้อนแตกเป็นกิ่ง ไม่กองเป็นบรรทัดเดียว)
-        const int TREE_MAX_DEPTH = 3;     // ความลึกสูงสุดของกิ่ง
-        const int TREE_MAX_ITEMS = 6;     // element ที่โชว์ต่อ array (เกิน = "…อีก N")
-        const int TREE_MAX_VAL   = 500;   // ตัวอักษรสูงสุดต่อค่า
+        const int TREE_MAX_DEPTH = 3;
+        const int TREE_MAX_ITEMS = 6;
+        const int TREE_MAX_VAL   = 500;
 
         static string JsonToReadable(string json)
         {
@@ -757,7 +704,7 @@ namespace MCPBridge
                 for (int i = 0; i < show; i++)
                     RenderJsonPair($"[{i}]", items[i], sb, prefix, i == items.Count - 1, depth);
                 if (items.Count > TREE_MAX_ITEMS)
-                    sb.Append(prefix).Append("└ …อีก ").Append(items.Count - TREE_MAX_ITEMS).Append(" รายการ\n");
+                    sb.Append(prefix).Append("└ …").Append(items.Count - TREE_MAX_ITEMS).Append(" more items\n");
             }
         }
 
@@ -776,7 +723,6 @@ namespace MCPBridge
                 return;
             }
 
-            // scalar (หรือลึกเกิน) — unescape + clamp + ตัดบรรทัด
             string v = val.Replace("\\n", "\n").Replace("\\t", "  ").Replace("\\r", "").Replace("\\\"", "\"");
             if (v.Length > TREE_MAX_VAL) v = v.Substring(0, TREE_MAX_VAL) + "…";
             if (v.Contains('\n'))
@@ -792,7 +738,6 @@ namespace MCPBridge
                 sb.Append(prefix).Append(branch).Append(key).Append(": ").Append(v).Append('\n');
         }
 
-        // แตก top-level elements ของ array (เคารพ string + bracket ซ้อน)
         static System.Collections.Generic.List<string> SplitJsonArray(string raw)
         {
             var items = new System.Collections.Generic.List<string>();
@@ -819,31 +764,26 @@ namespace MCPBridge
             return items;
         }
 
-        // Character-by-character JSON flat-object parser — ไม่ใช้ regex กัน catastrophic backtracking
         static System.Collections.Generic.List<System.Collections.Generic.KeyValuePair<string,string>>
             ParseJsonPairs(string s)
         {
             var pairs = new System.Collections.Generic.List<System.Collections.Generic.KeyValuePair<string,string>>();
-            int i = 1, len = s.Length;   // เริ่มหลัง {
+            int i = 1, len = s.Length;
 
             while (i < len - 1)
             {
                 while (i < len && s[i] != '"' && s[i] != '}') i++;
                 if (i >= len - 1 || s[i] == '}') break;
 
-                // อ่าน key
                 string key = ReadJsonString(s, ref i);
 
-                // หา :
                 while (i < len && s[i] != ':') i++;
                 i++;
                 while (i < len && char.IsWhiteSpace(s[i])) i++;
 
-                // อ่าน value
                 string val = ReadJsonValue(s, ref i);
                 pairs.Add(new System.Collections.Generic.KeyValuePair<string,string>(key, val));
 
-                // ข้าม ,
                 while (i < len && s[i] != ',' && s[i] != '}') i++;
                 if (i < len && s[i] == ',') i++;
             }
@@ -853,14 +793,14 @@ namespace MCPBridge
         static string ReadJsonString(string s, ref int i)
         {
             if (i >= s.Length || s[i] != '"') return "";
-            i++;   // ข้าม "
+            i++;
             var sb = new System.Text.StringBuilder();
             while (i < s.Length && s[i] != '"')
             {
                 if (s[i] == '\\' && i + 1 < s.Length) { sb.Append(s[i]); sb.Append(s[i+1]); i += 2; }
                 else { sb.Append(s[i]); i++; }
             }
-            if (i < s.Length) i++;   // ข้าม "
+            if (i < s.Length) i++;
             return sb.ToString();
         }
 
@@ -870,7 +810,6 @@ namespace MCPBridge
             char c = s[i];
             if (c == '"') return ReadJsonString(s, ref i);
 
-            // array หรือ object — คืน raw ทั้งก้อน (นับ bracket แบบข้าม string ข้างใน) ให้ tree renderer recurse ต่อ
             if (c == '[' || c == '{')
             {
                 char open = c, close = c == '[' ? ']' : '}';
@@ -893,7 +832,6 @@ namespace MCPBridge
             return s.Substring(vs, i - vs).Trim();
         }
 
-        // JSON pretty-printer เบาๆ สำหรับ GUI (ไม่ใช้ parser เต็ม)
         static string PrettyJson(string json)
         {
             if (string.IsNullOrEmpty(json)) return json;
@@ -932,7 +870,6 @@ namespace MCPBridge
             return s.isLoading ? $" ⏳{pending}" : $" •{pending}";
         }
 
-        // loading card กลางหน้าต่าง — โชว์ระหว่าง Unity compile (แทนแถบ helpBox บนหัว)
         void DrawCompilingOverlay()
         {
             var area = GUILayoutUtility.GetRect(10, 10, GUILayout.ExpandWidth(true), GUILayout.ExpandHeight(true));
@@ -940,7 +877,6 @@ namespace MCPBridge
             var card = new Rect(area.x + (area.width - W) * 0.5f, area.y + (area.height - H) * 0.5f, W, H);
             RBox(card, BG_RAISED, BORDER, 14f);
 
-            // spinner หมุนตามเวลา (glyph 4 เฟรม)
             string[] frames = { "◐", "◓", "◑", "◒" };
             int fi = (int)(EditorApplication.timeSinceStartup * 8) % frames.Length;
             var sp = new GUIStyle(EditorStyles.label) { alignment = TextAnchor.MiddleCenter, fontSize = FONT_SIZE + 18 };
@@ -948,10 +884,9 @@ namespace MCPBridge
             GUI.Label(new Rect(card.x, card.y + 18, card.width, 42), frames[fi], sp);
 
             CenterLabel(new Rect(card.x, card.y + 70, card.width, 30), "<b>Compiling scripts…</b>", TEXT_WHITE, FONT_SIZE + 7);
-            CenterLabel(new Rect(card.x, card.y + 108, card.width, 24), "แชตหยุดชั่วคราว — ข้อความที่พิมพ์ไว้ยังอยู่", TEXT_MUTE, FONT_SIZE + 2);
+            CenterLabel(new Rect(card.x, card.y + 108, card.width, 24), "Chat is paused; your draft is preserved.", TEXT_MUTE, FONT_SIZE + 2);
         }
 
-        // ── Claude models ทั้งหมด — id ใช้ได้ทั้ง API และ CLI (--model) ──
         static readonly string[] CLAUDE_MODEL_IDS =
         {
             "claude-fable-5", "claude-opus-4-8", "claude-opus-4-7",
@@ -959,8 +894,8 @@ namespace MCPBridge
         };
         static readonly string[] CLAUDE_MODEL_LABELS =
         {
-            "Fable 5 — ฉลาดสุด", "Opus 4.8 — ล่าสุด", "Opus 4.7",
-            "Opus 4.6", "Sonnet 4.6 — สมดุล", "Haiku 4.5 — เร็วสุด",
+            "Fable 5 — highest capability", "Opus 4.8 — latest", "Opus 4.7",
+            "Opus 4.6", "Sonnet 4.6 — balanced", "Haiku 4.5 — fastest",
         };
         const int CLAUDE_MODEL_DEFAULT = 4;   // Sonnet 4.6
 
@@ -972,7 +907,6 @@ namespace MCPBridge
             EditorGUILayout.LabelField(text, st);
         }
 
-        // segmented pill selector (แทน GUILayout.Toolbar) — คืน index ที่เลือก
         static int SegRow(int cur, string[] labels)
         {
             var r = EditorGUILayout.GetControlRect(false, 30, GUILayout.ExpandWidth(true));
@@ -998,7 +932,6 @@ namespace MCPBridge
             return picked;
         }
 
-        // text field พื้นมุมโค้งเข้าธีม (รองรับ password) — คืนค่าใหม่
         static string ThemedTextField(string value, bool password = false)
         {
             var box = EditorGUILayout.GetControlRect(false, 28);
@@ -1010,8 +943,7 @@ namespace MCPBridge
                             : GUI.TextField(inner, value ?? "", st);
         }
 
-        // dropdown เข้าธีม (generic — ใช้กับ Model/Effort/อะไรก็ได้) กางเป็น panel ในหน้า ไม่ใช้ GenericMenu ขาวของ OS
-        string _openDrop;   // prefKey ของ dropdown ที่กางอยู่ (null = ปิด)
+        string _openDrop;
         void ThemedDropdown(string prefKey, string[] ids, string[] labels, int defIdx)
         {
             string cur = EditorPrefs.GetString(prefKey, ids[defIdx]);
@@ -1029,7 +961,6 @@ namespace MCPBridge
             if (GUI.Button(r, GUIContent.none, GUIStyle.none)) { _openDrop = open ? null : prefKey; Repaint(); }
             if (!open) return;
 
-            // option list (กางใต้ช่อง — ดันเนื้อหาลง ไม่ใช่ overlay)
             const float rowH = 26f;
             int n = ids.Length;
             EditorGUILayout.Space(2);
@@ -1058,7 +989,6 @@ namespace MCPBridge
             }
         }
 
-        // กล่อง info เข้าธีม (แทน HelpBox เทา)
         void InfoCard(string text)
         {
             var st = new GUIStyle(EditorStyles.label) { fontSize = FONT_SIZE - 1, wordWrap = true, padding = new RectOffset(12, 12, 8, 8) };
@@ -1081,7 +1011,7 @@ namespace MCPBridge
             EditorGUILayout.LabelField("Settings", title);
             var sub = new GUIStyle(EditorStyles.label) { fontSize = FONT_SIZE - 1 };
             sub.normal.textColor = TEXT_HINT;
-            EditorGUILayout.LabelField("ตั้งค่า backend · model · พฤติกรรมของ MCP Bridge", sub);
+            EditorGUILayout.LabelField("Configure the backend, model and AI Unity MCP Server behavior", sub);
             EditorGUILayout.Space(12);
 
             SettingsLabel("Backend");
@@ -1095,45 +1025,45 @@ namespace MCPBridge
             {
                 SettingsLabel("Anthropic API Key");
                 string newKey = ThemedTextField(_apiKey, password: true);
-                if (newKey != _apiKey) { _apiKey = newKey; EditorPrefs.SetString("DeltaMCP_ApiKey", _apiKey); }
+                if (newKey != _apiKey) { _apiKey = newKey; EditorPrefs.SetString("AIUnityMCPServer_ApiKey", _apiKey); }
 
                 EditorGUILayout.Space(10);
-                SettingsLabel("Model — เลือก Claude ที่จะใช้");
-                ThemedDropdown("DeltaMCP_ApiModel", CLAUDE_MODEL_IDS, CLAUDE_MODEL_LABELS, CLAUDE_MODEL_DEFAULT);
+                SettingsLabel("Model — select a Claude model");
+                ThemedDropdown("AIUnityMCPServer_ApiModel", CLAUDE_MODEL_IDS, CLAUDE_MODEL_LABELS, CLAUDE_MODEL_DEFAULT);
 
                 EditorGUILayout.Space(10);
-                InfoCard("Sonnet/Haiku เร็ว+ถูก เหมาะงาน interactive · Opus/Fable ฉลาดสุดแต่แพง/ช้ากว่า · key เก็บใน EditorPrefs ไม่ขึ้น git");
+                InfoCard("Sonnet and Haiku are faster and cheaper for interactive work. Opus and Fable offer higher capability at greater cost and latency. The key is stored in EditorPrefs and is not committed to git.");
             }
             else
             {
                 SettingsLabel("Claude CLI command");
-                string cmd = EditorPrefs.GetString("DeltaMCP_ClaudeCmd", "claude");
+                string cmd = EditorPrefs.GetString("AIUnityMCPServer_ClaudeCmd", "claude");
                 string newCmd = ThemedTextField(cmd);
-                if (newCmd != cmd) EditorPrefs.SetString("DeltaMCP_ClaudeCmd", newCmd);
+                if (newCmd != cmd) EditorPrefs.SetString("AIUnityMCPServer_ClaudeCmd", newCmd);
 
                 EditorGUILayout.Space(10);
-                SettingsLabel("Model — เลือก Claude ที่จะใช้");
-                ThemedDropdown("DeltaMCP_CliModel", CLAUDE_MODEL_IDS, CLAUDE_MODEL_LABELS, CLAUDE_MODEL_DEFAULT);
+                SettingsLabel("Model — select a Claude model");
+                ThemedDropdown("AIUnityMCPServer_CliModel", CLAUDE_MODEL_IDS, CLAUDE_MODEL_LABELS, CLAUDE_MODEL_DEFAULT);
 
                 EditorGUILayout.Space(10);
-                SettingsLabel("Effort (คิดลึก vs เร็ว)");
-                ThemedDropdown("DeltaMCP_CliEffort",
+                SettingsLabel("Effort (depth versus speed)");
+                ThemedDropdown("AIUnityMCPServer_CliEffort",
                     new[] { "low", "medium", "high", "max" },
-                    new[] { "Low — เร็วสุด", "Medium — สมดุล (default)", "High — คิดลึก", "Max — ลึกสุด แต่ช้า" }, 1);
+                    new[] { "Low — fastest", "Medium — balanced (default)", "High — deeper reasoning", "Max — deepest but slowest" }, 1);
 
                 EditorGUILayout.Space(10);
-                SettingsLabel("Experimental flags (เปิดถ้าไม่แฮงค์)");
+                SettingsLabel("Experimental flags (enable only when stable)");
                 var togSt = new GUIStyle(EditorStyles.label) { fontSize = FONT_SIZE - 1 };
                 togSt.normal.textColor = TEXT_WHITE;
-                bool useEffort = EditorPrefs.GetBool("DeltaMCP_CliUseEffort", false);
-                bool newUseEffort = EditorGUILayout.ToggleLeft(new GUIContent(" ส่ง --effort ตามที่เลือก (บาง CLI ไม่รองรับ → แฮงค์)"), useEffort, togSt);
-                if (newUseEffort != useEffort) EditorPrefs.SetBool("DeltaMCP_CliUseEffort", newUseEffort);
-                bool fast = EditorPrefs.GetBool("DeltaMCP_CliFast", false);
-                bool newFast = EditorGUILayout.ToggleLeft(new GUIContent(" Fast mode: ปิดโหลด MCP (--strict-mcp-config) เร็วขึ้นแต่เสี่ยงแฮงค์บน Windows"), fast, togSt);
-                if (newFast != fast) EditorPrefs.SetBool("DeltaMCP_CliFast", newFast);
+                bool useEffort = EditorPrefs.GetBool("AIUnityMCPServer_CliUseEffort", false);
+                bool newUseEffort = EditorGUILayout.ToggleLeft(new GUIContent(" Send the selected --effort value (unsupported CLI versions may hang)"), useEffort, togSt);
+                if (newUseEffort != useEffort) EditorPrefs.SetBool("AIUnityMCPServer_CliUseEffort", newUseEffort);
+                bool fast = EditorPrefs.GetBool("AIUnityMCPServer_CliFast", false);
+                bool newFast = EditorGUILayout.ToggleLeft(new GUIContent(" Fast mode: skip MCP loading with --strict-mcp-config; faster but may hang on Windows"), fast, togSt);
+                if (newFast != fast) EditorPrefs.SetBool("AIUnityMCPServer_CliFast", newFast);
 
                 EditorGUILayout.Space(10);
-                InfoCard("ใช้ Claude Code CLI (subscription/Max) — ไม่กิน API Key\nต้องติดตั้ง Claude Code + login ก่อน\nช้ากว่า API เพราะ cold-start ทุกครั้ง — เลือก Haiku/Sonnet ให้เร็วขึ้น");
+                InfoCard("Uses the Claude Code CLI subscription without consuming an API key.\nInstall Claude Code and sign in first.\nEach request cold-starts the CLI, so Haiku or Sonnet responds faster.");
             }
 
             EditorGUILayout.Space(14);
@@ -1151,28 +1081,24 @@ namespace MCPBridge
         void DrawChatHistory()
         {
             var s = S;
-            float reserved = 116 + _inputHeight + (s.images.Count > 0 ? 48 : 0); // +2 สำหรับ border รอบ input box
+            float reserved = 116 + _inputHeight + (s.images.Count > 0 ? 48 : 0);
             if (_showScriptList || _showPrefabList || _showSkillList) reserved += SCRIPT_LIST_HEIGHT;
             if (_showLive) reserved += 44;
             if (_showKeywords) reserved += 92;
             if (_showWatch) reserved += 64 + Mathf.Min(RuntimeWatch.Count, 8) * 19;
             float historyHeight = Mathf.Max(100, position.height - reserved);
 
-            // ── smooth scroll: ดัก wheel เอง → ตั้ง target → lerp เข้าหา ──
             var ev = Event.current;
-            // โซน history จริง: ใต้แถว tabs(38)+เส้น(1)+ช่องว่าง(6) ลงมาแค่ historyHeight
-            // (สูตรเดิมกินเกินลงไปถึง picker/input → wheel บน picker โดนแย่งไป scroll แชต)
             const float histTop = 45f;
             bool overHistory = ev.mousePosition.y >= histTop && ev.mousePosition.y < histTop + historyHeight;
             if (ev.type == EventType.ScrollWheel && overHistory)
             {
-                if (ev.delta.y < 0) _stickBottom = false;  // scroll ขึ้น = เลิกตามล่าง
+                if (ev.delta.y < 0) _stickBottom = false;
                 if (!_scrollAnim) _scrollTarget = s.chatScroll.y;
                 _scrollTarget = Mathf.Max(0, _scrollTarget + ev.delta.y * 30f);
                 _scrollAnim = true;
                 ev.Use();
             }
-            // lerp เข้าหา target ทีละเฟรม (หยุดเมื่อใกล้พอ)
             if (_scrollAnim)
             {
                 float ny = Mathf.Lerp(s.chatScroll.y, _scrollTarget, 0.35f);
@@ -1182,14 +1108,11 @@ namespace MCPBridge
             }
 
             float wantY = s.chatScroll.y;
-            // ไม่โชว์ scrollbar — smooth wheel scroll จัดการให้อยู่แล้ว
             s.chatScroll = EditorGUILayout.BeginScrollView(s.chatScroll,
                 false, false, GUIStyle.none, GUIStyle.none, GUIStyle.none,
                 GUILayout.Height(historyHeight), GUILayout.ExpandWidth(true));
-            // โดน clamp (ถึงขอบบน/ล่าง) → ค่าจริงต่างจากที่ตั้ง → หยุด animate
             if (_scrollAnim && Mathf.Abs(s.chatScroll.y - wantY) > 0.5f)
             {
-                // ถ้าตั้งจะเลื่อนลง (wantY มากกว่า) แต่ถูก clamp = ถึงล่างสุด → กลับมาตามล่าง
                 if (wantY > s.chatScroll.y + 0.5f) _stickBottom = true;
                 _scrollTarget = s.chatScroll.y;
                 _scrollAnim = false;
@@ -1197,18 +1120,16 @@ namespace MCPBridge
 
             float bubbleWidth = position.width - 36;
 
-            // textStyle หนัก (ใช้ CalcHeight) → cache. แต่ตัว text color set ใหม่ทุกเฟรม กัน Hot Reload ไม่อัปเดต
             if (_msgTextStyle == null)
                 _msgTextStyle = new GUIStyle(EditorStyles.label)
                 {
                     wordWrap = true, richText = true, fontSize = MSG_FONT,
                     padding = new RectOffset(12, 12, 9, 9)
                 };
-            _msgTextStyle.fontSize = MSG_FONT;   // set ทุกเฟรม กัน style ค้างข้าม domain reload
+            _msgTextStyle.fontSize = MSG_FONT;
             _msgTextStyle.font = UiFont;
             _msgTextStyle.normal.textColor = TEXT_WHITE;
 
-            // style เล็ก (role/stat) — สร้างใหม่ทุกเฟรม + จัดกึ่งกลางแนวตั้ง ให้อยู่บรรทัดเดียวกัน
             _roleUser   = new GUIStyle(EditorStyles.miniBoldLabel) { fontSize = FONT_SIZE - 1, richText = true };
             _roleClaude = new GUIStyle(EditorStyles.miniBoldLabel) { fontSize = FONT_SIZE - 1, richText = true };
             _roleUser.normal.textColor   = TEXT_MUTE;
@@ -1219,11 +1140,9 @@ namespace MCPBridge
             {
                 var msg = s.messages[mi];
 
-                // ── ข้าม AI response ถ้า user message ก่อนหน้า collapsed ──
                 if (msg.Role == "assistant" && mi > 0 && s.messages[mi - 1].Role == "user" && s.messages[mi - 1].collapsed)
                     continue;
 
-                // bubble "กำลังคิด" / "รอคิว" — มีปุ่มยกเลิกต่ออัน
                 if (msg.Content == THINKING || msg.Content == QUEUED)
                 {
                     bool thinking = msg.Content == THINKING;
@@ -1233,13 +1152,12 @@ namespace MCPBridge
                     if (thinking)
                     {
                         double sec = EditorApplication.timeSinceStartup - s.requestStart;
-                        t = $"◌ กำลังคิด...  ({FmtTime(sec)}";
+                        t = $"◌ Thinking...  ({FmtTime(sec)}";
                         if (s.backend == 1 && ClaudeCliClient.LiveOutputTokens > 0) t += $" · {ClaudeCliClient.LiveOutputTokens:N0} tokens";
                         t += ")";
                     }
-                    else t = "⏳ รอคิว...";
+                    else t = "⏳ Queued...";
 
-                    // header avatar เหมือน assistant ปกติ → เห็นปุ๊บรู้ว่าเป็น "คำตอบที่กำลังมา" ของ prompt ข้างบน
                     var thRow = GUILayoutUtility.GetRect(bubbleWidth, 24);
                     var thAv = new Rect(thRow.x + 8, thRow.y + 1, 20, 20);
                     RRect(thAv, ACCENT, 10f);
@@ -1247,37 +1165,33 @@ namespace MCPBridge
                     thAvSt.normal.textColor = Color.white;
                     GUI.Label(thAv, "✦", thAvSt);
                     var thName = new GUIStyle(_roleClaude) { alignment = TextAnchor.MiddleLeft };
-                    GUI.Label(new Rect(thAv.xMax + 9, thRow.y, 200, thRow.height), "MCP Bridge", thName);
+                    GUI.Label(new Rect(thAv.xMax + 9, thRow.y, 200, thRow.height), "AI Unity MCP Server", thName);
 
-                    // bubble ทรงเดียวกับ assistant (มุม 4/12 + แถบ accent ซ้าย, inset 8 ตรงขอบการ์ด)
                     var rrFull = GUILayoutUtility.GetRect(bubbleWidth, 28);
                     var rr = new Rect(rrFull.x + 8, rrFull.y, rrFull.width - 16, 26);
                     RRect4(rr, BG_SURFACE, 4f, 12f, 12f, 12f);
                     RRect4(new Rect(rr.x, rr.y, 3, rr.height), ACCENT, 3f, 0f, 0f, 3f);
                     GUI.Label(new Rect(rr.x + 12, rr.y, rr.width - 84, rr.height), t, think);
-                    // ปุ่มยกเลิก ✕ ต่ออัน
                     var xr = new Rect(rr.xMax - 62, rr.y + 3, 54, rr.height - 6);
                     RRect(xr, new Color(0.32f, 0.16f, 0.18f), 6f);
                     var xStyle = new GUIStyle(EditorStyles.miniLabel) { alignment = TextAnchor.MiddleCenter, fontSize = FONT_SIZE - 3 };
                     xStyle.normal.textColor = new Color(1f, 0.86f, 0.82f);
-                    GUI.Label(xr, "✕ ยกเลิก", xStyle);
+                    GUI.Label(xr, "✕ Cancel", xStyle);
                     if (GUI.Button(xr, GUIContent.none, GUIStyle.none))
                     {
-                        if (thinking) { s.cts?.Cancel(); s.cliSessionId = null; s.cliTurnCount = 0; }  // ยกเลิกตัวที่กำลังคิด → ล้าง session (turn ถูกตัด)
-                        else CancelQueued(s, mi);             // เอาออกจากคิว (ไม่แตะ session — ยังไม่ได้รัน)
+                        if (thinking) { s.cts?.Cancel(); s.cliSessionId = null; s.cliTurnCount = 0; }
+                        else CancelQueued(s, mi);
                     }
                     EditorGUILayout.Space(6);
-                    // ขยับ spinner/timer ตอน "กำลังคิด" — throttle ไม่ให้ repaint ทุกเฟรม (กันแย่ง frame เกมตอน play)
                     if (thinking && Event.current.type == EventType.Repaint)
                     {
                         double now = EditorApplication.timeSinceStartup;
-                        double interval = Application.isPlaying ? 0.5 : 0.25;   // play: ช้าลง ลดผลกระทบเกม
+                        double interval = Application.isPlaying ? 0.5 : 0.25;
                         if (now - _lastThinkRepaint > interval) { _lastThinkRepaint = now; Repaint(); }
                     }
                     continue;
                 }
 
-                // ── เส้นแบ่งระหว่าง pair — วาดทั้ง collapsed/expanded (จังหวะแนวตั้งเท่ากัน toggle แล้วแถวไม่เด้ง) ──
                 if (msg.Role == "user" && mi > 0)
                 {
                     EditorGUILayout.Space(2);
@@ -1286,19 +1200,16 @@ namespace MCPBridge
                     EditorGUILayout.Space(4);
                 }
 
-                // ── Collapsed: user message แสดง compact row แทน full bubble ──
                 if (msg.Role == "user" && msg.collapsed)
                 {
                     var crFull = GUILayoutUtility.GetRect(bubbleWidth, 34);
                     var cr = new Rect(crFull.x + 8, crFull.y, crFull.width - 16, 31);
                     RRect(cr, BG_RAISED, 8f);
                     RRect4(new Rect(cr.x, cr.y, 2, cr.height), ACCENT, 8f, 0f, 0f, 8f);
-                    // ลูกศรในกล่อง 16px จัดกึ่งกลาง — ▶/▼ glyph กว้างไม่เท่ากัน ถ้าชิดซ้าย text จะขยับ
                     var toggleR = new Rect(cr.x + 9, cr.y, 16, cr.height);
                     var toggleStyle = new GUIStyle(EditorStyles.label) { fontSize = FONT_SIZE, alignment = TextAnchor.MiddleCenter };
                     toggleStyle.normal.textColor = ACCENT;
                     GUI.Label(toggleR, "▶", toggleStyle);
-                    // preview text — เอาแค่บรรทัดแรก (ตัด note metadata ที่ append ด้วย \n)
                     string preview = msg.Content;
                     int _nl = preview.IndexOf('\n');
                     if (_nl >= 0) preview = preview.Substring(0, _nl);
@@ -1311,20 +1222,16 @@ namespace MCPBridge
                     continue;
                 }
 
-                // fade-in นุ่มๆ ตอนข้อความใหม่โผล่ (overlay สี bg จางหายไป)
                 float fade = msg.FadeAlpha(EditorApplication.timeSinceStartup);
                 var fadeGroup = EditorGUILayout.BeginVertical();
 
-                // เลือก view ตาม role ปัจจุบัน (Dev/Art) — user message คืน msg เดิมเสมอ
                 var displayMsg = msg.RoleView(CurrentRole());
                 bool isUser = displayMsg.Role == "user";
                 Color accent = isUser ? TEXT_MUTE : ACCENT;
-                Color bg     = BG_SURFACE;   // user/assistant พื้นสีเดียวกัน
+                Color bg     = BG_SURFACE;
 
-                // ── ป้ายชื่อ (tag) ──
                 if (isUser)
                 {
-                    // header card ตอนกาง — กรอบเดียวกับตอนหุบ (inset 8) เนื้อหาข้างล่างอยู่ในขอบเดียวกัน
                     var hrFull = GUILayoutUtility.GetRect(bubbleWidth, 34);
                     var hr = new Rect(hrFull.x + 8, hrFull.y, hrFull.width - 16, 31);
                     RRect(hr, BG_RAISED, 8f);
@@ -1332,7 +1239,6 @@ namespace MCPBridge
                     var toggleStyle2 = new GUIStyle(EditorStyles.label) { fontSize = FONT_SIZE, alignment = TextAnchor.MiddleCenter };
                     toggleStyle2.normal.textColor = ACCENT;
                     GUI.Label(new Rect(hr.x + 9, hr.y, 16, hr.height), "▼", toggleStyle2);
-                    // prompt preview ข้างๆ ▼ — เอาแค่บรรทัดแรก (ตัด note metadata ที่ append ด้วย \n)
                     string hdrPreview = msg.Content;
                     int _hdrNl = hdrPreview.IndexOf('\n');
                     if (_hdrNl >= 0) hdrPreview = hdrPreview.Substring(0, _hdrNl);
@@ -1341,38 +1247,32 @@ namespace MCPBridge
                     var hdrPreviewStyle = new GUIStyle(EditorStyles.label) { font = UiFont, fontSize = MSG_FONT, alignment = TextAnchor.MiddleLeft };
                     hdrPreviewStyle.normal.textColor = TEXT_WHITE;
                     GUI.Label(new Rect(hr.x + 30, hr.y, hdrMaxW, hr.height), hdrPreview, hdrPreviewStyle);
-                    // ทั้งการ์ดคลิกเพื่อหุบได้ (header สะอาด ไม่มี chip ปน)
                     if (GUI.Button(hr, GUIContent.none, GUIStyle.none)) { msg.collapsed = true; Repaint(); }
 
-                    // ชื่อ user — ข้อความเปล่าๆ สี clay เหนือ bubble ฝั่งขวา (ไม่มีพื้นหลัง/ดาว)
                     var tagRow = GUILayoutUtility.GetRect(bubbleWidth, 22);
                     var tagSt = new GUIStyle(EditorStyles.label) { alignment = TextAnchor.MiddleRight, font = UiFont, fontSize = MSG_FONT, fontStyle = FontStyle.Bold };
                     tagSt.normal.textColor = ACCENT;
-                    GUI.Label(new Rect(tagRow.x, tagRow.y, tagRow.width - 12, 22), "พี่สุดหล่อ", tagSt);
+                    GUI.Label(new Rect(tagRow.x, tagRow.y, tagRow.width - 12, 22), "You", tagSt);
                 }
                 else
                 {
                     var hrow = GUILayoutUtility.GetRect(bubbleWidth, 24);
-                    // avatar วงกลม clay + ✦
                     var avR = new Rect(hrow.x + 8, hrow.y + 1, 20, 20);
                     RRect(avR, ACCENT, 10f);
                     var avStyle = new GUIStyle(EditorStyles.label) { alignment = TextAnchor.MiddleCenter, fontSize = FONT_SIZE - 1 };
                     avStyle.normal.textColor = Color.white;
                     GUI.Label(avR, "✦", avStyle);
-                    // ชื่อ
                     string roleTag = CurrentRole() == 1 ? "Art" : "Dev";
                     var nameStyle = new GUIStyle(_roleClaude) { alignment = TextAnchor.MiddleLeft };
-                    GUI.Label(new Rect(avR.xMax + 9, hrow.y, bubbleWidth - 200, hrow.height), $"MCP Bridge  ·  {roleTag}", nameStyle);
-                    // ปุ่ม Copy All (ขวาสุด — inset 8 ให้ตรงขอบการ์ด)
+                    GUI.Label(new Rect(avR.xMax + 9, hrow.y, bubbleWidth - 200, hrow.height), $"AI Unity MCP Server  ·  {roleTag}", nameStyle);
                     var copyR = new Rect(hrow.xMax - 70, hrow.y + 3, 58, 18);
                     RBox(copyR, BG_RAISED, BORDER, 6f);
                     CenterLabel(copyR, "Copy All", TEXT_MUTE, FONT_SIZE - 3);
                     if (GUI.Button(copyR, GUIContent.none, GUIStyle.none))
                     {
                         EditorGUIUtility.systemCopyBuffer = displayMsg.DisplayContent;
-                        Debug.Log("[MCP Bridge] Copied AI response to clipboard.");
+                        Debug.Log("[AI Unity MCP Server] Copied AI response to clipboard.");
                     }
-                    // stat (ซ้ายของปุ่ม Copy)
                     if (!string.IsNullOrEmpty(displayMsg.Stat))
                     {
                         var statStyle = new GUIStyle(EditorStyles.miniLabel) { fontSize = FONT_SIZE - 4, alignment = TextAnchor.MiddleRight };
@@ -1380,17 +1280,14 @@ namespace MCPBridge
                         GUI.Label(new Rect(hrow.x, hrow.y, copyR.x - hrow.x - 8, hrow.height), displayMsg.Stat, statStyle);
                     }
                 }
-                EditorGUILayout.Space(3);   // กัน label ทับกล่อง (เหมือน tag)
+                EditorGUILayout.Space(3);
 
                 if (displayMsg.HasRich)
                 {
-                    // ── มี code block หรือ ตาราง → render แบบ segment ──
                     DrawSegments(displayMsg, accent);
                 }
                 else
                 {
-                    // ── ข้อความปกติ — fast path (manual rect + cache) ──
-                    // กว้างอิง bubbleWidth + inset 8 ทั้งคู่ → อยู่ในขอบเดียวกับ header card เป๊ะ
                     string rich = displayMsg.Rich();
                     float availEst = bubbleWidth - 16f;
                     float cw_est = isUser ? availEst * 0.80f : availEst;
@@ -1417,7 +1314,6 @@ namespace MCPBridge
                 EditorGUILayout.Space(8);
 
                 EditorGUILayout.EndVertical();
-                // overlay สีพื้นจางๆ ทับ แล้วค่อยๆ โปร่งใส = fade-in
                 if (fade < 1f)
                 {
                     if (Event.current.type == EventType.Repaint)
@@ -1426,15 +1322,12 @@ namespace MCPBridge
                 }
             }
 
-            // (สถานะ "กำลังคิด" + เวลา ย้ายไปอยู่ในกล่อง bubble แล้ว — ไม่มีข้อความกลางจอ)
-            // วาด label ว่างเสมอ เพื่อ control count คงที่ (กัน "Invalid GUILayout state")
             var loading = new GUIStyle(EditorStyles.centeredGreyMiniLabel) { fontSize = FONT_SIZE - 2 };
             loading.normal.textColor = new Color(0.5f, 0.5f, 0.5f);
             EditorGUILayout.LabelField(s.queue.Count > 0 ? $"({s.queue.Count} in queue)" : "", loading);
 
             EditorGUILayout.EndScrollView();
 
-            // auto-scroll ลงล่างสุด — เฉพาะตอน "อยู่ล่างสุด" (ไม่เด้งถ้า scroll ขึ้นไปอ่าน)
             if (_autoScroll && Event.current.type == EventType.Repaint)
             {
                 if (_stickBottom) { _scrollTarget = 100000f; _scrollAnim = true; }
@@ -1445,7 +1338,6 @@ namespace MCPBridge
         GUIStyle _codeStyle, _codeHeaderStyle, _segTextStyle, _tableCellStyle, _tableHeadStyle;
         Font _monoFont;
 
-        // วาดข้อความที่มี code block — text ปกติ + code box (header path + highlight + copy)
         void DrawSegments(ChatMessage msg, Color accent)
         {
             if (_segTextStyle == null)
@@ -1456,16 +1348,14 @@ namespace MCPBridge
                 _codeStyle = new GUIStyle(EditorStyles.label) { wordWrap = false, richText = true, fontSize = MSG_FONT - 1, font = _monoFont, padding = new RectOffset(10, 10, 8, 8) };
                 _codeStyle.normal.textColor = new Color(0.82f, 0.84f, 0.88f);
                 _codeHeaderStyle = new GUIStyle(EditorStyles.miniLabel) { fontSize = FONT_SIZE - 2, padding = new RectOffset(8, 8, 3, 3), richText = true };
-                // หมายเหตุ: _tableCellStyle/_tableHeadStyle สร้างใน DrawTable ที่เดียว (กันตั้ง alignment ซ้ำ/ชน)
             }
-            _segTextStyle.fontSize = MSG_FONT;   // set ทุกเฟรม กัน style ค้างข้าม domain reload
+            _segTextStyle.fontSize = MSG_FONT;
             _segTextStyle.font = UiFont;
             _segTextStyle.normal.textColor = TEXT_WHITE;
             _codeStyle.fontSize = MSG_FONT - 1;
             _codeStyle.normal.textColor = new Color(0.82f, 0.84f, 0.88f);
 
-            float w = position.width - 62;   // ขอบขวาตรงกับ header card (inset 8)
-            // แถบสี + เนื้อหา (เว้นซ้าย 8 + gap 8 หลังแถบ กันข้อความชนเส้น accent)
+            float w = position.width - 62;
             EditorGUILayout.BeginHorizontal();
             GUILayout.Space(8);
             var barRect = GUILayoutUtility.GetRect(2, 2, GUILayout.Width(2), GUILayout.ExpandHeight(true));
@@ -1476,7 +1366,6 @@ namespace MCPBridge
             {
                 if (seg.Table)
                 {
-                    // header bar (toggle) — เหมือน code box
                     DrawSegHeader(seg, w, "[=]", "table", null);
                     if (!seg.Collapsed) DrawTable(seg, w);
                 }
@@ -1489,11 +1378,9 @@ namespace MCPBridge
                 }
                 else
                 {
-                    // header bar (toggle) + ปุ่ม copy
                     DrawSegHeader(seg, w, "</>", seg.Header, seg.Raw);
                     if (!seg.Collapsed)
                     {
-                        // code body (พื้นดำเข้ม + highlight + เลือกได้)
                         float ch = _codeStyle.CalcHeight(new GUIContent(seg.Rendered), w);
                         var cr = GUILayoutUtility.GetRect(w, ch);
                         RRect4(cr, new Color(0.063f, 0.071f, 0.094f), 0f, 0f, 8f, 8f);
@@ -1502,15 +1389,13 @@ namespace MCPBridge
                 }
                 EditorGUILayout.Space(2);
             }
-            EditorGUILayout.Space(6);   // padding ล่าง — กันข้อความบรรทัดสุดท้ายติดขอบ
+            EditorGUILayout.Space(6);
             EditorGUILayout.EndVertical();
             EditorGUILayout.EndHorizontal();
-            // วาดแถบ accent ทับ (หลังรู้ความสูง)
             if (Event.current.type == EventType.Repaint)
                 EditorGUI.DrawRect(new Rect(barRect.x, barRect.y, 2, GUILayoutUtility.GetLastRect().yMax - barRect.y), accent);
         }
 
-        // แถบหัว box (code/table) — มีลูกศรพับ + ชื่อ + ปุ่ม Copy (ถ้ามี copyText) คลิกแถบ = toggle
         void DrawSegHeader(Seg seg, float w, string icon, string title, string copyText)
         {
             var hbar = GUILayoutUtility.GetRect(w, 24);
@@ -1521,22 +1406,19 @@ namespace MCPBridge
             float clickW = hbar.width;
             if (!string.IsNullOrEmpty(copyText))
             {
-                clickW = hbar.width - 72;   // เว้นพื้นที่ปุ่ม Copy ไม่ให้โดน toggle
+                clickW = hbar.width - 72;
                 if (GUI.Button(new Rect(hbar.xMax - 66, hbar.y + 1, 60, 18), "Copy", EditorStyles.miniButton))
                 {
                     EditorGUIUtility.systemCopyBuffer = copyText;
-                    Debug.Log($"[MCP Bridge] Copied {title} to clipboard.");
+                    Debug.Log($"[AI Unity MCP Server] Copied {title} to clipboard.");
                 }
             }
-            // คลิกแถบหัว (ส่วนที่ไม่ใช่ปุ่ม Copy) = พับ/กาง
             if (GUI.Button(new Rect(hbar.x, hbar.y, clickW, hbar.height), GUIContent.none, GUIStyle.none))
                 seg.Collapsed = !seg.Collapsed;
         }
 
-        // วาด markdown table เป็นกริดจริง — กว้างตามสัดส่วนตัวอักษร, wrap ในเซลล์, แถวแรกเป็น header
         void DrawTable(Seg seg, float w)
         {
-            // สร้าง style ใหม่ทุกครั้ง (ไม่ cache) — กัน Hot Reload เก็บ style เก่าที่ alignment ผิด
             var cellStyle = new GUIStyle(EditorStyles.label) { font = UiFont, wordWrap = true, richText = true, fontSize = FONT_SIZE - 1, padding = new RectOffset(8, 8, 6, 6), alignment = TextAnchor.MiddleLeft };
             cellStyle.normal.textColor = Color.white;
             var headStyle = new GUIStyle(cellStyle) { fontStyle = FontStyle.Bold, alignment = TextAnchor.MiddleCenter };
@@ -1546,13 +1428,11 @@ namespace MCPBridge
             int cols = seg.Cols;
             var rows = seg.Rows;
 
-            // ── เลย์เอาต์: การ์ดหุ้มนอก (margin) + padding ในกล่อง → ตารางอยู่ข้างใน ไม่ชนขอบ ──
-            const float OUTER = 0f;    // ชิดขอบ box (มี header bar เป็นกรอบบนแล้ว)
-            const float PAD   = 10f;   // padding ในการ์ด (กรอบ→ตาราง)
+            const float OUTER = 0f;
+            const float PAD   = 10f;
             float boxW = w - OUTER * 2;
-            float gridW = boxW - PAD * 2;   // ความกว้างตารางจริง
+            float gridW = boxW - PAD * 2;
 
-            // ความกว้างคอลัมน์ตามสัดส่วนความยาวข้อความสูงสุดของแต่ละคอลัมน์ (clamp ขั้นต่ำ)
             var weight = new float[cols];
             foreach (var row in rows)
                 for (int c = 0; c < cols; c++)
@@ -1562,7 +1442,6 @@ namespace MCPBridge
             var cw = new float[cols];
             for (int c = 0; c < cols; c++) cw[c] = gridW * weight[c] / sumW;
 
-            // คำนวณความสูงแต่ละแถว (max ของเซลล์ที่ wrap)
             var rowH = new float[rows.Count];
             float totalH = 0f;
             for (int r = 0; r < rows.Count; r++)
@@ -1578,22 +1457,19 @@ namespace MCPBridge
                 totalH += hMax;
             }
 
-            var line   = new Color(1f, 1f, 1f, 0.08f);          // เส้นตารางจาง (cool)
-            var cardBg = new Color(0.063f, 0.071f, 0.094f);    // พื้นการ์ด
-            var cellBg = BG_SURFACE;                            // พื้นเซลล์
+            var line   = new Color(1f, 1f, 1f, 0.08f);
+            var cardBg = new Color(0.063f, 0.071f, 0.094f);
+            var cellBg = BG_SURFACE;
 
-            // จองพื้นที่ = การ์ด + margin บน-ล่าง
             float boxH = totalH + PAD * 2;
             var slot = GUILayoutUtility.GetRect(w, boxH + OUTER * 2);
             var box  = new Rect(slot.x + OUTER, slot.y + OUTER, boxW, boxH);
             RRect4(box, cardBg, 0f, 0f, 8f, 8f);
 
-            // กริดตารางอยู่ในการ์ด เยื้องเข้ามา PAD
             float gx = box.x + PAD, gy = box.y + PAD;
             var grid = new Rect(gx, gy, gridW, totalH);
             EditorGUI.DrawRect(grid, cellBg);
 
-            // ข้อความในเซลล์ — บังคับขาวด้วย color tag (กัน style เพี้ยนตอน Hot Reload/unfocus)
             float y = gy;
             for (int r = 0; r < rows.Count; r++)
             {
@@ -1603,14 +1479,12 @@ namespace MCPBridge
                 {
                     string raw = c < rows[r].Length ? rows[r][c] : "";
                     string txt = r == 0 ? $"<b><color=#FFFFFF>{raw}</color></b>" : $"<color=#FFFFFF>{raw}</color>";
-                    // GUI.Label = จัด alignment ได้จริง (SelectableLabel ไม่สน alignment)
                     GUI.Label(new Rect(x + 6, y, cw[c] - 12, rowH[r]), txt, st);
                     x += cw[c];
                 }
                 y += rowH[r];
             }
 
-            // เส้น grid ขาวบางๆ (ทับทีหลัง) — แนวนอน + แนวตั้ง อยู่ในขอบ grid
             void HLine(float yy) => EditorGUI.DrawRect(new Rect(grid.x, Mathf.Min(yy, grid.yMax - 1), gridW, 1), line);
             void VLine(float xx) => EditorGUI.DrawRect(new Rect(Mathf.Min(xx, grid.xMax - 1), grid.y, 1, totalH), line);
             float yy2 = grid.y; HLine(yy2);
@@ -1629,46 +1503,40 @@ namespace MCPBridge
             if (GUILayout.Button("+ Image", small, GUILayout.Height(20), GUILayout.Width(72)))
                 BrowseImages();
 
-            // ── ปุ่ม profiler (📍GC / 🔬Deep / 📈Live) ซ่อนชั่วคราว: คู่กับ ProfilerReader.ENABLED=false (ลด overhead ตอน Play) ──
             const bool SHOW_PROFILER_UI = false;
             if (SHOW_PROFILER_UI)
             {
-            // 📍 GC — toggle ดัก GC allocation callstack (กดได้เฉพาะตอน Play เหมือนปุ่ม Deep)
-            // → ดูบรรทัดที่ alloc ผ่าน keyword gc/perf (auto-gather รวม Snapshot ให้)
             var gcStyle = new GUIStyle(small);
             if (ProfilerReader.AllocCallstacks) gcStyle.normal.textColor = WARN;
-            else if (!Application.isPlaying) gcStyle.normal.textColor = new Color(0.5f, 0.5f, 0.5f);   // หรี่ตอนยังไม่ Play (กดไม่ได้)
+            else if (!Application.isPlaying) gcStyle.normal.textColor = new Color(0.5f, 0.5f, 0.5f);
             string gcLabel = ProfilerReader.AllocCallstacks ? "📍 GC+" : "📍 GC";
-            if (GUILayout.Button(new GUIContent(gcLabel, "toggle ดัก GC allocation callstack\nเล่นอยู่ → กดเปิด → พิมพ์/กด keyword gc หรือ perf → เห็นบรรทัดที่ alloc จริง\nดักเฉพาะ alloc ที่เกิดตอนเปิด (ไม่ย้อนหลัง) · ต้องกด Play ก่อน · recompile = ปิดเอง"), gcStyle, GUILayout.Height(20), GUILayout.Width(54)))
+            if (GUILayout.Button(new GUIContent(gcLabel, "Toggle GC allocation callstack capture.\nIn Play Mode, enable it and use the gc or perf keyword to see exact allocation lines.\nOnly new allocations are captured. Compilation disables capture automatically."), gcStyle, GUILayout.Height(20), GUILayout.Width(54)))
             {
                 if (!Application.isPlaying)
-                    ShowNotification(new GUIContent("กด Play ก่อน — 📍 GC ดักได้เฉพาะตอนเล่นอยู่"));
+                    ShowNotification(new GUIContent("Enter Play Mode first; GC capture works only while playing."));
                 else
                     ProfilerReader.AllocCallstacks = !ProfilerReader.AllocCallstacks;
             }
 
-            // 🔬 Deep — จับ Deep Profile 5 วิ → CPU method + GC บรรทัด + Network bandwidth ราย object → ส่งอัตโนมัติ
             var deepStyle = new GUIStyle(small);
             string deepLabel;
             if (CpuDeepCapture.IsCapturing) { deepStyle.normal.textColor = DANGER; deepLabel = $"⏺ {CpuDeepCapture.SecondsLeft}s"; }
             else deepLabel = "🔬 Deep";
-            if (GUILayout.Button(new GUIContent(deepLabel, "จับเชิงลึก 5 วิ → CPU (method+บรรทัด) + GC (บรรทัดที่ alloc) + Network (bandwidth ราย object) → ส่งให้ AI อัตโนมัติ\nกดแล้วเล่นให้เกิดอาการหน่วงระหว่างนับถอยหลัง 5 วิ\n(ถ้าพิมพ์คำถามไว้ในช่อง จะส่งคำถามนั้น · ต้องกด Play ก่อน · หนักเฉพาะ 5 วิ ปิดเอง)"), deepStyle, GUILayout.Height(20), GUILayout.Width(64)))
+            if (GUILayout.Button(new GUIContent(deepLabel, "Capture five seconds of CPU methods and lines, GC allocation sites, and per-object network bandwidth, then send the evidence to the AI.\nReproduce the slowdown during the countdown. A draft question is included. Capture requires Play Mode and stops automatically."), deepStyle, GUILayout.Height(20), GUILayout.Width(64))
+                && !CpuDeepCapture.IsCapturing)
             {
-                if (CpuDeepCapture.IsCapturing) { /* กำลังจับอยู่ — กดซ้ำไม่ทำอะไร */ }
-                else if (!Application.isPlaying)
-                    ShowNotification(new GUIContent("กด Play ก่อน — 🔬 Deep จับ CPU ได้เฉพาะตอนเล่นอยู่"));
+                if (!Application.isPlaying)
+                    ShowNotification(new GUIContent("Enter Play Mode first; Deep CPU capture works only while playing."));
                 else
                     CpuDeepCapture.Start(5f, report =>
                     {
-                        // ถูกเรียกหลังจับครบ 5 วิเท่านั้น → แนบ + ส่งอัตโนมัติ (เคารพคำถามที่พิมพ์ไว้)
                         S.attached["Deep Analysis"] = report;
                         if (string.IsNullOrEmpty(S.draft.Trim()))
-                            S.draft = "Analyze the attached Deep profiler data (CPU method-level + GC callstacks + Network bandwidth per object). ชี้ method+บรรทัดที่กิน CPU, บรรทัดที่ alloc GC, และ NetworkObject ที่ sync เปลือง bandwidth, จัดลำดับความเสี่ยง, เสนอวิธีแก้";
+                            S.draft = "Analyze the attached Deep profiler data: CPU methods, GC callstacks, and per-object network bandwidth. Identify expensive methods and lines, allocation sites, and bandwidth-heavy NetworkObjects. Rank risks and recommend fixes.";
                         Enqueue();
                     });
             }
 
-            // toggle แผง Live (real-time)
             var liveStyle = new GUIStyle(small);
             if (_showLive) liveStyle.normal.textColor = ONLINE;
             if (GUILayout.Button(_showLive ? "🟢 Live" : "📈 Live", liveStyle, GUILayout.Height(20), GUILayout.Width(60)))
@@ -1681,19 +1549,17 @@ namespace MCPBridge
             if (GUILayout.Button("🔑 Keys", kwStyle, GUILayout.Height(20), GUILayout.Width(60)))
                 _showKeywords = !_showKeywords;
 
-            // toggle Watch panel (ดูค่า field สดตอนเล่น)
             var wStyle = new GUIStyle(small);
             int wn = RuntimeWatch.Count;
             if (_showWatch) wStyle.normal.textColor = ACCENT;
-            if (GUILayout.Button(new GUIContent(wn > 0 ? $"👁 Watch ({wn})" : "👁 Watch", "ดูค่า field/property สดตอน Play — เลือก object แล้วพิมพ์ field กด ＋"),
+            if (GUILayout.Button(new GUIContent(wn > 0 ? $"👁 Watch ({wn})" : "👁 Watch", "Inspect a live field or property in Play Mode. Select an object, enter a field, then press ＋."),
                 wStyle, GUILayout.Height(20), GUILayout.Width(wn > 0 ? 86 : 70)))
                 _showWatch = !_showWatch;
 
-            // toggle Realtime Monitor (background — จับ memory สูง/ค้าง → log)
             var monStyle = new GUIStyle(small);
             if (RealtimeMonitor.IsOn) monStyle.normal.textColor = DANGER;
             string monLabel = RealtimeMonitor.IsOn ? "🔴 Monitor" : "🩺 Monitor";
-            if (GUILayout.Button(new GUIContent(monLabel, "ตรวจสุขภาพ Unity แบบ real-time (memory/ค้าง) → Library/DeltaMCP/monitor.log"), monStyle, GUILayout.Height(20), GUILayout.Width(78)))
+            if (GUILayout.Button(new GUIContent(monLabel, "Monitor Unity health in real time, including memory and stalls → Library/AIUnityMCPServer/monitor.log"), monStyle, GUILayout.Height(20), GUILayout.Width(78)))
                 RealtimeMonitor.Toggle();
 
             if (s.images.Count > 0)
@@ -1733,7 +1599,6 @@ namespace MCPBridge
             if (ProfilerReader.IsLive)
             {
                 float fps = ProfilerReader.CurrentFps();
-                // สีตาม FPS: เขียว >=55, เหลือง >=30, แดง < 30
                 Color c = fps >= 55 ? ONLINE
                         : fps >= 30 ? WARN
                         : DANGER;
@@ -1741,7 +1606,6 @@ namespace MCPBridge
                 style.normal.textColor = c;
                 string bound = ProfilerReader.BoundStatus();
                 GUILayout.Label($"● LIVE [{bound}]  " + ProfilerReader.LiveStats(), style);
-                // throttle repaint — ตอน play ช้าลง (0.5s) กันแย่ง frame เกม, ตอน edit เร็วได้ (0.2s)
                 double now = EditorApplication.timeSinceStartup;
                 double liveInterval = Application.isPlaying ? 0.5 : 0.2;
                 if (now - _lastLiveRepaint > liveInterval) { _lastLiveRepaint = now; Repaint(); }
@@ -1749,39 +1613,36 @@ namespace MCPBridge
             else
             {
                 var style = new GUIStyle(EditorStyles.miniLabel) { fontSize = FONT_SIZE - 2 };
-                GUILayout.Label("📈 Live — กด Play เพื่อดูค่า Profiler แบบ real-time", style);
+                GUILayout.Label("📈 Live — enter Play Mode for real-time Profiler values", style);
             }
             EditorGUILayout.EndVertical();
         }
 
-        // ── 👁 Watch panel — ดูค่า field/property สดตอน Play + quick-add ตัวที่เลือก + ลบทีละตัว ──
         void DrawWatchPanel()
         {
             if (!_showWatch) return;
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
 
-            // quick-add: [ตัวที่เลือก] [field ____] [＋ Watch]
             var sel = Selection.activeGameObject;
             EditorGUILayout.BeginHorizontal();
             var selSt = new GUIStyle(EditorStyles.miniLabel) { fontSize = FONT_SIZE - 2, alignment = TextAnchor.MiddleLeft };
             selSt.normal.textColor = sel != null ? TEXT_WHITE : TEXT_HINT;
-            GUILayout.Label(new GUIContent(sel != null ? $"👁 {Trunc(sel.name, 16)}" : "👁 เลือก object",
-                sel != null ? sel.name : "เลือก GameObject ใน Hierarchy ก่อน"), selSt, GUILayout.Width(118));
+            GUILayout.Label(new GUIContent(sel != null ? $"👁 {Trunc(sel.name, 16)}" : "👁 Select object",
+                sel != null ? sel.name : "Select a GameObject in the Hierarchy first"), selSt, GUILayout.Width(118));
 
             GUI.SetNextControlName("watchField");
             var fldSt = new GUIStyle(EditorStyles.textField) { fontSize = FONT_SIZE - 1 };
             _watchField = EditorGUILayout.TextField(_watchField, fldSt);
-            bool addClick = GUILayout.Button(new GUIContent("＋ Watch", "เพิ่ม watch field ของตัวที่เลือก (component หาให้อัตโนมัติ)"),
+            bool addClick = GUILayout.Button(new GUIContent("＋ Watch", "Watch a field on the selected object; the component is detected automatically."),
                 EditorStyles.miniButton, GUILayout.Width(64));
             EditorGUILayout.EndHorizontal();
 
-            // placeholder ในช่อง field ตอนว่าง
             if (string.IsNullOrEmpty(_watchField) && Event.current.type == EventType.Repaint)
             {
                 var ph = new GUIStyle(EditorStyles.miniLabel) { fontSize = FONT_SIZE - 2 };
                 ph.normal.textColor = TEXT_HINT;
                 var r = GUILayoutUtility.GetLastRect();
-                GUI.Label(new Rect(126, r.y + 1, 160, 16), "field เช่น currentHp", ph);
+                GUI.Label(new Rect(126, r.y + 1, 160, 16), "field, for example currentHp", ph);
             }
 
             bool enterAdd = Event.current.type == EventType.KeyDown && Event.current.keyCode == KeyCode.Return
@@ -1795,18 +1656,17 @@ namespace MCPBridge
                 Repaint();
             }
 
-            // รายการ watch
             var snap = RuntimeWatch.Snapshot();
             var hintSt = new GUIStyle(EditorStyles.miniLabel) { fontSize = FONT_SIZE - 2, wordWrap = true };
             hintSt.normal.textColor = TEXT_HINT;
             if (snap.Count == 0)
             {
-                GUILayout.Label("ยังไม่มี watch — พิมพ์ field แล้วกด ＋ หรือสั่ง AI ว่า \"watch currentHp\"", hintSt);
+                GUILayout.Label("No watches yet. Enter a field and press ＋, or ask the AI to \"watch currentHp\".", hintSt);
             }
             else
             {
                 if (!Application.isPlaying)
-                    GUILayout.Label("กด Play เพื่อเริ่มเก็บค่า (sample ทุก 0.5s)", hintSt);
+                    GUILayout.Label("Enter Play Mode to sample values every 0.5 seconds.", hintSt);
 
                 foreach (var v in snap)
                 {
@@ -1827,21 +1687,19 @@ namespace MCPBridge
 
                     GUILayout.FlexibleSpace();
 
-                    // 🔔 alert badge (ถ้าตั้งเงื่อนไขไว้)
                     if (!string.IsNullOrEmpty(v.alert))
                     {
                         var alSt = new GUIStyle(EditorStyles.miniLabel) { fontSize = FONT_SIZE - 2 };
                         alSt.normal.textColor = v.alertCount > 0 ? DANGER : TEXT_HINT;
                         GUILayout.Label(new GUIContent(v.alertCount > 0 ? $"🔔{v.alertCount}" : "🔔",
-                            $"alert {v.alert} — ทริกไป {v.alertCount} ครั้ง"), alSt, GUILayout.Width(v.alertCount > 0 ? 30 : 18));
+                            $"alert {v.alert} — triggered {v.alertCount} times"), alSt, GUILayout.Width(v.alertCount > 0 ? 30 : 18));
                     }
 
-                    // sparkline ของ history (เฉพาะค่าตัวเลข)
                     var spark = GUILayoutUtility.GetRect(50f, 16f);
                     DrawSparkline(spark, v.history, tc);
 
                     var xSt = new GUIStyle(EditorStyles.miniButton) { fontSize = FONT_SIZE - 2 };
-                    if (GUILayout.Button(new GUIContent("✕", "ลบ watch นี้"), xSt, GUILayout.Width(22), GUILayout.Height(17)))
+                    if (GUILayout.Button(new GUIContent("✕", "Remove this watch"), xSt, GUILayout.Width(22), GUILayout.Height(17)))
                     { RuntimeWatch.RemoveWatch(v.key); Repaint(); }
                     EditorGUILayout.EndHorizontal();
                 }
@@ -1855,7 +1713,6 @@ namespace MCPBridge
                 EditorGUILayout.EndHorizontal();
             }
 
-            // live repaint ตอน Play (0.5s) — ค่าขยับเอง ไม่ต้องกด
             if (Application.isPlaying)
             {
                 double now = EditorApplication.timeSinceStartup;
@@ -1865,10 +1722,6 @@ namespace MCPBridge
         }
 
         // ══════════════════════════════════════════════════════════════════════
-        //  KEYWORD REGISTRY — แหล่งความจริงเดียว (chip ที่แสดง + auto-gather + tooltip)
-        //  เพิ่ม keyword ใหม่ = เพิ่ม 1 บรรทัดที่นี่ที่เดียว
-        //  Path = tool ที่ดึงข้อมูลอัตโนมัติ (null = ไม่ auto-gather เช่น action/สแกนหนัก/ต้องมี argument)
-        //  Chip = แสดงเป็นปุ่มในแผง keyword (false = alias ใช้ auto-gather อย่างเดียว)
         // ══════════════════════════════════════════════════════════════════════
         enum KwG { Dev, Art, Both }
         sealed class Kw
@@ -1883,20 +1736,20 @@ namespace MCPBridge
         {
             // 💻 DEV
             new Kw("gc",         KwG.Dev,  "/perf/audit",          "GC alloc/frame + top allocators"),
-            new Kw("spike",      KwG.Dev,  "/perf/audit",          "FPS drop + ต้นเหตุแต่ละ spike"),
+            new Kw("spike",      KwG.Dev,  "/perf/audit",          "FPS drops and the cause of each spike"),
             new Kw("net",        KwG.Dev,  "/perf/audit",          "network: ping/jitter/bandwidth"),
             new Kw("physics",    KwG.Dev,  "/perf/audit",          "rigidbody + non-convex collider"),
-            new Kw("console",    KwG.Dev,  "/console/read",        "error/warning ล่าสุดใน console"),
-            new Kw("log",        KwG.Dev,  "/console/logfile",     "Editor.log + stack trace เต็ม"),
+            new Kw("console",    KwG.Dev,  "/console/read",        "latest Console errors and warnings"),
+            new Kw("log",        KwG.Dev,  "/console/logfile",     "Editor.log with full stack traces"),
             new Kw("state",      KwG.Dev,  "/diagnose/state",      "runtime snapshot (fps/freeze/network)"),
             new Kw("exceptions", KwG.Dev,  "/diagnose/exceptions", "runtime exceptions + stack trace"),
-            new Kw("profiler",   KwG.Dev,  "/perf/audit",          "call-tree → method ตัวการ"),
+            new Kw("profiler",   KwG.Dev,  "/perf/audit",          "call tree and contributing methods"),
             new Kw("memory",     KwG.Dev,  "/diagnose/memory",     "memory snapshot (heap/native/GFX/GC gen)"),
-            new Kw("fusion",     KwG.Dev,  "/diagnose/fusion",     "Fusion 2: tick/RTT/bandwidth/resim (ต้อง Play)"),
-            new Kw("refactor",   KwG.Dev,  null,                   "สแกน script ที่ควร refactor (AI สั่งเอง — สแกนหนัก)"),
-            new Kw("code",       KwG.Dev,  null,                   "วิเคราะห์โค้ด (ใช้คู่กับ @script)"),
-            new Kw("script",     KwG.Dev,  null,                   "อ่าน source: script <ชื่อ>"),
-            new Kw("watch",      KwG.Dev,  null,                   "ดูค่า field สดตอนเล่น: watch <field> (เลือก object ไว้ก็พอ) · เปิดแผง 👁 Watch ดูสด/ลบได้ · ดูค่า=wv · ล้าง=watchclear"),
+            new Kw("fusion",     KwG.Dev,  "/diagnose/fusion",     "Fusion 2 tick, RTT, bandwidth and resimulation data (Play Mode required)"),
+            new Kw("refactor",   KwG.Dev,  null,                   "scan scripts for refactoring opportunities (expensive AI-driven scan)"),
+            new Kw("code",       KwG.Dev,  null,                   "analyze code, usually with an @script reference"),
+            new Kw("script",     KwG.Dev,  null,                   "read source with: script <name>"),
+            new Kw("watch",      KwG.Dev,  null,                   "inspect a live field: watch <field>. Select an object first, use the Watch panel to inspect or remove, wv to read, and watchclear to clear."),
             // 🎨 ART
             new Kw("draw",       KwG.Art,  "/perf/audit",          "draw calls + SetPass + batching"),
             new Kw("batches",    KwG.Art,  "/perf/audit",          "batch count"),
@@ -1908,39 +1761,29 @@ namespace MCPBridge
             new Kw("particle",   KwG.Art,  "/perf/audit",          "particle system count"),
             new Kw("shadow",     KwG.Art,  "/perf/audit",          "shadow caster count"),
             new Kw("light",      KwG.Art,  "/perf/audit",          "realtime light count"),
-            new Kw("tex",        KwG.Art,  null,                   "audit texture (AI สั่งเอง — สแกนหนัก)"),
-            new Kw("unused",     KwG.Art,  null,                   "asset ที่ไม่ได้ใช้ (AI สั่งเอง — สแกนหนัก)"),
+            new Kw("tex",        KwG.Art,  null,                   "audit textures (expensive AI-driven scan)"),
+            new Kw("unused",     KwG.Art,  null,                   "find potentially unused assets (expensive AI-driven scan)"),
             // ⚡ BOTH
             new Kw("fps",        KwG.Both, "/perf/audit",          "FPS + frame stats + CPU/GPU-bound"),
-            new Kw("perf",       KwG.Both, "/perf/audit",          "health check รวมทั้งหมด"),
-            new Kw("audit",      KwG.Both, "/perf/audit",          "health check รวมทั้งหมด"),
-            new Kw("hier",       KwG.Both, "/scene/hierarchy",     "tree structure ของ scene"),
-            new Kw("scene",      KwG.Both, null,                   "scene <ชื่อ> เพื่อ list/เปิด scene"),
-            new Kw("find",       KwG.Both, null,                   "ค้นหา asset: find <ชื่อ>"),
-            new Kw("play",       KwG.Both, null,                   "เข้า Play Mode"),
-            new Kw("stop",       KwG.Both, null,                   "ออก Play Mode"),
+            new Kw("perf",       KwG.Both, "/perf/audit",          "complete health check"),
+            new Kw("audit",      KwG.Both, "/perf/audit",          "complete health check"),
+            new Kw("hier",       KwG.Both, "/scene/hierarchy",     "scene tree structure"),
+            new Kw("scene",      KwG.Both, null,                   "scene <name> to list or open a scene"),
+            new Kw("find",       KwG.Both, null,                   "find an asset: find <name>"),
+            new Kw("play",       KwG.Both, null,                   "enter Play Mode"),
+            new Kw("stop",       KwG.Both, null,                   "exit Play Mode"),
             new Kw("pause",      KwG.Both, null,                   "pause Play Mode"),
-            new Kw("clear",      KwG.Both, null,                   "ล้าง console"),
+            new Kw("clear",      KwG.Both, null,                   "clear the Console"),
 
-            // ── alias (ไม่โชว์เป็น chip แต่พิมพ์แล้ว auto-gather ได้) ──
             new Kw("stutter",  KwG.Dev,  "/perf/audit",          "", false),
-            new Kw("worst",    KwG.Dev,  "/perf/worst",          "", false),   // เจาะ spike แย่สุด (ไม่ใช่ audit รวม)
-            new Kw("deep",     KwG.Dev,  null,                   "", false),   // ⚠️ /diagnose/deep หนัก (เดิน profiler ทุกเฟรม 0.5-5s) — ห้าม auto-run, ให้ AI สั่งเองผ่าน command
+            new Kw("worst",    KwG.Dev,  "/perf/worst",          "", false),
+            new Kw("deep",     KwG.Dev,  null,                   "", false),
             new Kw("network",  KwG.Dev,  "/perf/audit",          "", false),
             new Kw("ping",     KwG.Dev,  "/perf/audit",          "", false),
             new Kw("rtt",      KwG.Dev,  "/perf/audit",          "", false),
             new Kw("bandwidth",KwG.Dev,  "/perf/audit",          "", false),
             new Kw("bw",       KwG.Dev,  "/perf/audit",          "", false),
             new Kw("mem",      KwG.Both, "/diagnose/memory",     "", false),
-            // ── Thai aliases (ทีมพิมพ์ไทย — จับแบบ substring เพราะไทยไม่มีเว้นวรรคตัดคำ) ──
-            new Kw("เฟรมตก",  KwG.Both, "/perf/audit",          "", false),
-            new Kw("กระตุก",   KwG.Both, "/perf/audit",          "", false),
-            new Kw("แลค",     KwG.Both, "/perf/audit",          "", false),
-            new Kw("เฟรม",    KwG.Both, "/perf/audit",          "", false),
-            new Kw("แรม",     KwG.Both, "/diagnose/memory",     "", false),
-            new Kw("เมมโมรี่",  KwG.Both, "/diagnose/memory",     "", false),
-            new Kw("เออเรอ",  KwG.Dev,  "/console/read",        "", false),
-            new Kw("เออเร่อ",  KwG.Dev,  "/console/read",        "", false),
             new Kw("drawcalls",KwG.Art,  "/perf/audit",          "", false),
             new Kw("tris",     KwG.Art,  "/perf/audit",          "", false),
             new Kw("errors",   KwG.Dev,  "/console/read",        "", false),
@@ -1957,9 +1800,6 @@ namespace MCPBridge
             new Kw("unwatch",  KwG.Dev,  "/watch/clear",         "", false),
         };
 
-        // ── AUTO-GATHER map (derive จาก _keywords ที่มี Path) — single source ไม่ drift ──
-        //    keyword ส่วนใหญ่ → perf_audit ตัวเดียว → พิมพ์ "net gc fps" → dedupe → รันครั้งเดียว
-        //    ⚠️ refactor/tex/unused = Path null (สแกนหนัก ปล่อยให้ AI สั่งเอง กัน freeze)
         static readonly Dictionary<string, string> _kwAutoGather = BuildAutoGatherMap();
         static Dictionary<string, string> BuildAutoGatherMap()
         {
@@ -1978,21 +1818,15 @@ namespace MCPBridge
             {"/diagnose/deep","deep_analysis"}, {"/perf/worst","worst_spike"},
         };
 
-        // ดึงข้อมูลตาม keyword ที่เจอในข้อความ — dedupe path (รัน tool เดียวกันครั้งเดียว)
-        // เรียกบน main thread (Enqueue) → MCPHandlers.Dispatch รันตรงๆ ไม่ deadlock
         List<KeyValuePair<string, string>> AutoGather(string prompt)
         {
             var results = new List<KeyValuePair<string, string>>();
             if (string.IsNullOrEmpty(prompt)) return results;
-            var paths = new List<string>();   // เรียงตามที่เจอ + ไม่ซ้ำ
+            var paths = new List<string>();
             var tokens = System.Text.RegularExpressions.Regex.Split(prompt.ToLowerInvariant(), @"[^a-z0-9]+");
             foreach (var t in tokens)
                 if (!string.IsNullOrEmpty(t) && _kwAutoGather.TryGetValue(t, out string p) && !paths.Contains(p))
                     paths.Add(p);
-            // keyword ไทยไม่ถูกตัดเป็น token (ไทยไม่มีเว้นวรรคตัดคำ) → จับแบบ substring ตรงๆ
-            foreach (var kv in _kwAutoGather)
-                if (kv.Key.Length > 0 && kv.Key[0] >= 'ก' && prompt.Contains(kv.Key) && !paths.Contains(kv.Value))
-                    paths.Add(kv.Value);
             foreach (var path in paths)
             {
                 try
@@ -2001,7 +1835,7 @@ namespace MCPBridge
                     string label = _pathLabel.TryGetValue(path, out var l) ? l : path;
                     results.Add(new KeyValuePair<string, string>(label, data));
                 }
-                catch (System.Exception e) { UnityEngine.Debug.LogWarning($"[MCP] auto-gather {path}: {e.Message}"); }
+                catch (System.Exception e) { UnityEngine.Debug.LogWarning($"[AI Unity MCP Server] auto-gather {path}: {e.Message}"); }
             }
             return results;
         }
@@ -2014,7 +1848,7 @@ namespace MCPBridge
 
             var hint = new GUIStyle(EditorStyles.miniLabel) { fontSize = FONT_SIZE - 3 };
             hint.normal.textColor = TEXT_MUTE;
-            GUILayout.Label("กดปุ่มเพื่อใส่ keyword ในช่องพิมพ์ · ชี้เมาส์ค้างเพื่อดูคำอธิบาย", hint);
+            GUILayout.Label("Click a keyword to insert it into the prompt. Hover for a description.", hint);
 
             DrawKwRow(s, "Dev",  KwG.Dev,  ACCENT);
             DrawKwRow(s, "Art",  KwG.Art,  ACCENT_2);
@@ -2023,7 +1857,6 @@ namespace MCPBridge
             EditorGUILayout.EndVertical();
         }
 
-        // render keyword 1 กลุ่ม (เฉพาะ Chip==true) จาก _keywords — label สี + tooltip
         void DrawKwRow(ChatSession s, string label, KwG group, Color col)
         {
             EditorGUILayout.BeginHorizontal();
@@ -2054,13 +1887,10 @@ namespace MCPBridge
             DrawKeywordPanel();
             DrawWatchPanel();
 
-            // ── autocomplete picker (@/#//) — แสดง "เหนือ" ช่องพิมพ์ (เดิมอยู่ใต้ ชิดขอบจอ มองยาก) ──
             if (_showScriptList)      DrawScriptList();
             else if (_showPrefabList) DrawPrefabList();
             else if (_showSkillList)  DrawSkillList();
 
-            // พื้นโปร่งใส (background = null) → ให้กล่องมุมโค้ง (warm) ที่วาดข้างหลังโชว์แทน
-            // ห้ามใช้ cached Texture2D — EditorWindow serialize ข้าม domain reload → ค้างสีเก่า
             var inputStyle = new GUIStyle(EditorStyles.textArea)
             {
                 fontSize = FONT_SIZE, wordWrap = true,
@@ -2081,7 +1911,6 @@ namespace MCPBridge
             float contentH = inputStyle.CalcHeight(new GUIContent(s.draft + " "), textWEst) + 6;
             _inputHeight = Mathf.Clamp(contentH, INPUT_MIN, INPUT_MAX);
 
-            // border + bg รอบ input box
             var boxR  = EditorGUILayout.GetControlRect(false, _inputHeight + 2);
             var innerR = new Rect(boxR.x + 1, boxR.y + 1, boxR.width - 2, boxR.height - 2);
             if (Event.current.type == EventType.Repaint)
@@ -2092,7 +1921,6 @@ namespace MCPBridge
                 RRect(innerR, inputFocused ? BG_RAISED : BG_SURFACE, 10f);
             }
 
-            // vertical scroll เท่านั้น — ไม่มี horizontal bar ข้างล่าง
             float vsbW  = GUI.skin.verticalScrollbar.fixedWidth + 2;
             float textW = innerR.width - vsbW;
             float textH = Mathf.Max(innerR.height, contentH);
@@ -2109,20 +1937,17 @@ namespace MCPBridge
                 UpdateScriptMention();
             GUI.EndScrollView();
 
-            // placeholder วาดทับหลัง TextArea (Repaint only, ตอนว่างและยังไม่ focus)
             if (string.IsNullOrEmpty(s.draft) && Event.current.type == EventType.Repaint
                 && GUI.GetNameOfFocusedControl() != "PromptField")
             {
                 var phStyle = new GUIStyle(inputStyle) { padding = new RectOffset(11, 10, 9, 8) };
                 phStyle.normal.textColor = TEXT_HINT;
                 phStyle.normal.background = null;
-                GUI.Label(innerR, "ถาม Claude หรือสั่งงาน Unity…   Enter ส่ง · Shift+Enter ขึ้นบรรทัด", phStyle);
+                GUI.Label(innerR, "Ask Claude or control Unity…   Enter to send · Shift+Enter for a new line", phStyle);
             }
 
             HandleDragDrop(GUILayoutUtility.GetLastRect());
 
-            // ระหว่าง picker เปิด: รายการ filter เปลี่ยนทุก keystroke → control ID เลื่อน → focus หลุดเงียบๆ
-            // บังคับ focus อยู่ช่องพิมพ์ตลอด (ใน panel ไม่มีอะไรต้องพิมพ์อยู่แล้ว — มีแต่คลิกเลือก)
             if ((_showScriptList || _showPrefabList || _showSkillList) &&
                 Event.current.type == EventType.Repaint &&
                 GUI.GetNameOfFocusedControl() != "PromptField")
@@ -2131,7 +1956,6 @@ namespace MCPBridge
                 Repaint();
             }
 
-            // ── ปุ่ม Send/Stop/Clear ── (ส่งได้แม้กำลังโหลด → เข้า queue)
             var btnRow = GUILayoutUtility.GetRect(0, 30, GUILayout.ExpandWidth(true));
             bool busy = s.Busy;
             bool canSend = !EditorApplication.isCompiling && !string.IsNullOrEmpty(s.draft.Trim());
@@ -2143,19 +1967,17 @@ namespace MCPBridge
             CenterLabel(clearR, "Clear", TEXT_MUTE, FONT_SIZE - 1);
             if (GUI.Button(clearR, GUIContent.none, GUIStyle.none))
             {
-                // ยกเลิกงานที่ค้างก่อน (กัน pump รันต่อ + index เพี้ยนหลังลบข้อความ)
                 s.queue.Clear();
                 s.cts?.Cancel();
                 s.messages.Clear();
                 s.images.Clear();
                 s.draft = "";
-                s.cliSessionId = null;   // เริ่มบทสนทนา CLI ใหม่ (ไม่ resume ของเก่า)
+                s.cliSessionId = null;
                 s.cliTurnCount = 0;
                 try { System.IO.File.Delete(HistoryPath(s.backend)); } catch { }
             }
             rx -= 72;
 
-            // ปุ่มยกเลิก — โผล่เมื่อกำลังทำงาน
             if (busy)
             {
                 var stopR = new Rect(rx - 76, btnRow.y, 76, btnRow.height);
@@ -2173,7 +1995,6 @@ namespace MCPBridge
             if (canSend && GUI.Button(sendR, GUIContent.none, GUIStyle.none))
                 Enqueue();
 
-            // Enter = ส่ง/queue (Shift+Enter = บรรทัดใหม่)
             if (Event.current.type == EventType.KeyDown &&
                 Event.current.keyCode == KeyCode.Return &&
                 !Event.current.shift &&
@@ -2190,8 +2011,6 @@ namespace MCPBridge
             bool paste = e.type == EventType.KeyDown && e.keyCode == KeyCode.V && (e.control || e.command);
             if (!paste) return;
 
-            // ถ้า clipboard มี text อยู่แล้ว = paste ข้อความ → ปล่อยให้ paste ปกติ
-            // (ไม่ spawn PowerShell เช็ครูป — ตัวการที่ทำให้กระตุกตอน Ctrl+V)
             if (!string.IsNullOrEmpty(EditorGUIUtility.systemCopyBuffer)) return;
 
             string path = ClipboardImage.TryGetImagePath();
@@ -2218,7 +2037,6 @@ namespace MCPBridge
         {
             bool wasOpen = _showScriptList || _showPrefabList || _showSkillList;
             string draft = S.draft;
-            // '@' = script · '#' = prefab — เลือกตัวที่ token อยู่ท้ายสุด (ตัวที่กำลังพิมพ์)
             string sq = CurrentMentionQuery();        // '@'
             string pq = CurrentTokenQuery('#');       // '#'
             int atIdx = draft.LastIndexOf('@');
@@ -2233,7 +2051,6 @@ namespace MCPBridge
             }
             else { _showScriptList = false; _showPrefabList = false; }
 
-            // '/' = skill (เฉพาะ Subscription/CLI mode — CLI รันสกิลได้จริง)
             if (CurrentBackend() == 1)
             {
                 string sk = CurrentTokenQuery('/');
@@ -2242,12 +2059,10 @@ namespace MCPBridge
             }
             else _showSkillList = false;
 
-            // panel โผล่/หาย = control ID เลื่อน → focus ช่องพิมพ์หลุด → ดึงกลับ (พิมพ์ต่อได้ไม่สะดุด)
             bool nowOpen = _showScriptList || _showPrefabList || _showSkillList;
             if (wasOpen != nowOpen) { _refocusInput = true; Repaint(); }
         }
 
-        // ดึง query หลังตัวอักษรนำ (เช่น '/') ตัวล่าสุด ถ้าอยู่ต้นบรรทัด/หลังเว้นวรรค และไม่มี space ตาม
         string CurrentTokenQuery(char lead)
         {
             string draft = S.draft;
@@ -2268,7 +2083,7 @@ namespace MCPBridge
                 var name = sk.Name;
                 items.Add(new PickerItem { Name = "/" + sk.Name, Desc = sk.Description, Pick = () => InsertSkillMention(name) });
             }
-            DrawPickerPanel("/ skill — รันสกิล (โหมด Subscription)", items, ref _skillScroll, "ไม่พบ skill ที่ตรงกับที่พิมพ์");
+            DrawPickerPanel("/ skill — run a skill (Subscription mode)", items, ref _skillScroll, "No matching skill found");
         }
 
         void InsertSkillMention(string skillName)
@@ -2278,11 +2093,10 @@ namespace MCPBridge
             if (at < 0) return;
             s.draft = s.draft.Substring(0, at) + "/" + skillName + " ";
             _showSkillList = false;
-            _refocusInput = true;   // กลับไปพิมพ์ต่อได้เลย
+            _refocusInput = true;
             Repaint();
         }
 
-        // ── Picker panel (@/#//) เข้าธีม — แสดงเหนือช่องพิมพ์, zebra rows, เลื่อนล้อเมาส์ ──
         struct PickerItem { public string Name, Desc; public Action Pick; }
 
         void DrawPickerPanel(string title, List<PickerItem> items, ref Vector2 scroll, string emptyText)
@@ -2311,28 +2125,27 @@ namespace MCPBridge
             for (int i = 0; i < items.Count; i++)
             {
                 var row = new Rect(2, i * rowH, inner.width - 8, rowH);
-                bool hov = row.Contains(Event.current.mousePosition);   // ใน scrollview พิกัดเป็น content space ตรงกับ row
+                bool hov = row.Contains(Event.current.mousePosition);
                 if (Event.current.type == EventType.Repaint)
                 {
                     if (hov)
                     {
-                        RRect(row, new Color(ACCENT.r, ACCENT.g, ACCENT.b, 0.18f), 6f);   // hover — เห็นชัดว่าชี้ตัวไหน
+                        RRect(row, new Color(ACCENT.r, ACCENT.g, ACCENT.b, 0.18f), 6f);
                         RRect4(new Rect(row.x, row.y, 2, row.height), ACCENT, 6f, 0f, 0f, 6f);
                     }
                     else if ((i & 1) == 1)
                         RRect(row, new Color(1f, 1f, 1f, 0.03f), 6f);   // zebra
                 }
-                EditorGUIUtility.AddCursorRect(row, MouseCursor.Link);   // cursor มือชี้ = คลิกได้
+                EditorGUIUtility.AddCursorRect(row, MouseCursor.Link);
                 string desc = string.IsNullOrEmpty(items[i].Desc) ? "" :
                     "  <color=#9C948A>" + items[i].Desc.Replace("<", "«").Replace(">", "»") + "</color>";
                 GUI.Label(new Rect(row.x + 10, row.y, row.width - 16, rowH),
                     $"<color={(hov ? "#FFFFFF" : "#E8A87F")}>{items[i].Name}</color>{desc}", rowSt);
-                // ใช้ MouseDown ตรงๆ แทน GUI.Button — ไม่กิน control ID (กัน ID เลื่อนจน focus ช่องพิมพ์หลุด)
                 if (Event.current.type == EventType.MouseDown && row.Contains(Event.current.mousePosition))
                 {
                     Event.current.Use();
                     items[i].Pick();
-                    GUIUtility.ExitGUI();   // pick เปลี่ยน draft/ปิด list กลางเฟรม → ตัดเฟรมเริ่มใหม่
+                    GUIUtility.ExitGUI();
                 }
             }
             GUI.EndScrollView();
@@ -2347,7 +2160,7 @@ namespace MCPBridge
                 var name = sc.Name;
                 items.Add(new PickerItem { Name = "@" + sc.Name, Desc = sc.Path, Pick = () => InsertScriptMention(name) });
             }
-            DrawPickerPanel("@ script — คลิกเพื่อแนบไฟล์ให้ AI อ่าน", items, ref _scriptScroll, "ไม่พบ script ที่ตรงกับที่พิมพ์");
+            DrawPickerPanel("@ script — attach a file for the AI to read", items, ref _scriptScroll, "No matching script found");
         }
 
         void InsertScriptMention(string scriptName)
@@ -2357,7 +2170,7 @@ namespace MCPBridge
             if (at < 0) return;
             s.draft = s.draft.Substring(0, at) + "@" + scriptName + " ";
             _showScriptList = false;
-            _refocusInput = true;   // กลับไปพิมพ์ต่อได้เลย
+            _refocusInput = true;
             Repaint();
         }
 
@@ -2365,7 +2178,7 @@ namespace MCPBridge
         {
             if (PrefabIndex.Building && !PrefabIndex.Ready)
             {
-                DrawPickerPanel("# prefab", null, ref _prefabScroll, "กำลัง build prefab index… (รอสักครู่)");
+                DrawPickerPanel("# prefab", null, ref _prefabScroll, "Building the prefab index…");
                 return;
             }
             var results = PrefabIndex.Search(_prefabQuery, 12);
@@ -2375,7 +2188,7 @@ namespace MCPBridge
                 var name = pf.Name;
                 items.Add(new PickerItem { Name = "# " + pf.Name, Desc = pf.Path, Pick = () => InsertPrefabMention(name) });
             }
-            DrawPickerPanel("# prefab — คลิกเพื่อแนบเนื้อใน prefab", items, ref _prefabScroll, "ไม่พบ prefab ที่ตรงกับที่พิมพ์");
+            DrawPickerPanel("# prefab — attach prefab contents", items, ref _prefabScroll, "No matching prefab found");
         }
 
         void InsertPrefabMention(string prefabName)
@@ -2383,24 +2196,23 @@ namespace MCPBridge
             var s = S;
             int at = s.draft.LastIndexOf('#');
             if (at < 0) return;
-            // ชื่อมีช่องว่าง/อักขระพิเศษ → ครอบ [] ให้ parse กลับได้ (เช่น #[creep super])
             string token = System.Text.RegularExpressions.Regex.IsMatch(prefabName, @"^[A-Za-z0-9_]+$")
                 ? prefabName : $"[{prefabName}]";
             s.draft = s.draft.Substring(0, at) + "#" + token + " ";
             _showPrefabList = false;
-            _refocusInput = true;   // กลับไปพิมพ์ต่อได้เลย
+            _refocusInput = true;
             Repaint();
         }
 
         string BuildPromptWithScripts(string prompt, out List<string> primaryNames, out List<string> depNames)
         {
-            primaryNames = new List<string>();   // ไฟล์ที่ @ เอง
-            depNames = new List<string>();        // ไฟล์ที่ auto-add (dependency)
+            primaryNames = new List<string>();
+            depNames = new List<string>();
             var matches = System.Text.RegularExpressions.Regex.Matches(prompt, @"@([\w/]+\.cs)");
             if (matches.Count == 0) return prompt;
 
             var seen = new HashSet<string>();
-            var attachedPaths = new List<string>();   // path ที่แนบแล้ว (ไว้ scan dependency + กันซ้ำ)
+            var attachedPaths = new List<string>();
             var sb = new System.Text.StringBuilder(prompt);
             sb.Append("\n\n--- Referenced scripts (full source) ---\n");
 
@@ -2417,30 +2229,24 @@ namespace MCPBridge
                 primaryNames.Add(System.IO.Path.GetFileName(path));
             }
 
-            // ── A1: ถามเชิงวิเคราะห์ → ตามไฟล์ที่ script อ้างถึงมาแนบด้วย (ลึก 1 ชั้น, cap 6) ──
-            //    @เฉยๆ (ถามสั้นๆ) จะไม่ดึง dependency เพื่อประหยัด context
             if (primaryNames.Count > 0 && IsAnalysisIntent(prompt))
             {
-                const int MAX_DEPS = 12;   // เผื่อ partial class แตกหลายไฟล์ (เช่น NetworkTrait = 6) + dep อื่นๆ
+                const int MAX_DEPS = 12;
                 var depSeen = new HashSet<string>(attachedPaths, System.StringComparer.OrdinalIgnoreCase);
                 var deps = new List<CodebaseIndex.ScriptEntry>();
 
-                // (1) referenced types ที่ script @ อ้างถึงตรงๆ (เช่น Actor, Trait, ColiderEvent)
                 foreach (var p in attachedPaths)
                 {
                     string src = CodebaseIndex.ReadContent(p);
                     foreach (var dep in CodebaseIndex.ResolveReferencedScripts(src, p, 12))
                     {
-                        if (!depSeen.Add(dep.Path)) continue;   // ไม่ซ้ำกับที่แนบแล้ว/ที่เพิ่งเพิ่ม
+                        if (!depSeen.Add(dep.Path)) continue;
                         deps.Add(dep);
                         if (deps.Count >= MAX_DEPS) break;
                     }
                     if (deps.Count >= MAX_DEPS) break;
                 }
 
-                // (2) Smart 1: ตามสาย inheritance/interface ของไฟล์ที่แนบทั้งหมด (BFS ลึก 2) →
-                //     ให้ AI เห็นว่า member/property มาจาก base/interface ไหน (กันฟันธงผิดว่า "member หาย")
-                //     เช่น ColiderEvent : INetworkActor → ดึง INetworkActor มาด้วย → รู้ว่า .Actor มาจาก interface
                 if (deps.Count < MAX_DEPS)
                 {
                     var toScan = new Queue<string>();
@@ -2455,7 +2261,7 @@ namespace MCPBridge
                             string bp = CodebaseIndex.ResolvePath(baseName);
                             if (bp == null || !depSeen.Add(bp)) continue;
                             deps.Add(new CodebaseIndex.ScriptEntry { Name = baseName + ".cs", Path = bp });
-                            toScan.Enqueue(bp);   // ตามสาย inheritance ต่อไปอีกชั้น
+                            toScan.Enqueue(bp);
                             if (deps.Count >= MAX_DEPS) break;
                         }
                     }
@@ -2463,10 +2269,10 @@ namespace MCPBridge
 
                 if (deps.Count > 0)
                 {
-                    sb.Append("\n--- Referenced dependencies + inheritance chain (รวม base/interface ที่ member อาจมาจาก) ---\n");
+                    sb.Append("\n--- Referenced dependencies and inheritance chain, including base classes or interfaces that may define members ---\n");
                     foreach (var dep in deps)
                     {
-                        string content = CodebaseIndex.ReadContent(dep.Path, 14000);   // cap ใหญ่พอให้ method ยาวๆ ครบทั้งตัว (กัน truncate ตัดครึ่ง → AI เดา "ลืมโค้ด")
+                        string content = CodebaseIndex.ReadContent(dep.Path, 14000);
                         if (content == null) continue;
                         sb.Append($"\n// DEP: {dep.Path}\n```csharp\n{content}\n```\n");
                         depNames.Add(System.IO.Path.GetFileName(dep.Path));
@@ -2477,38 +2283,32 @@ namespace MCPBridge
             return (primaryNames.Count + depNames.Count) > 0 ? sb.ToString() : prompt;
         }
 
-        // ถามเชิงวิเคราะห์/แก้ไข? → ค่อยดึง dependency (กัน context บวมตอน @ ถามสั้นๆ)
         static bool IsAnalysisIntent(string prompt)
         {
             if (string.IsNullOrEmpty(prompt)) return false;
             string p = prompt.ToLowerInvariant();
-            string[] kw = { "refactor", "optimize", "optimise", "review", "improve",
-                            "วิเคราะห์", "แก้", "ปรับ", "ตรวจ", "ปัญหา", "bug", "บั๊ก", "บัค", "ดูให้",
-                            // debug-intent: "ทำไม X ไม่ Y" คือคำถาม debug ที่ใช้บ่อยสุด — ต้องดึง dependency ให้เห็นโค้ดจริง
-                            "ทำไม", "why", "หาย", "ค้าง", "เพี้ยน", "ผิดปกติ", "พัง", "เจ๊ง",
-                            "ไม่ลด", "ไม่ขึ้น", "ไม่เพิ่ม", "ไม่ทำงาน", "ไม่โดน", "ไม่เข้า", "ไม่ขยับ", "ไม่เปลี่ยน",
-                            "crash", "error", "exception", "broken", "ไม่ทำ", "หาไม่เจอ", "ไล่โค้ด", "trace" };
+            string[] kw = { "refactor", "optimize", "optimise", "review", "improve", "analyze", "analyse",
+                            "fix", "inspect", "problem", "bug", "why", "missing", "stuck", "incorrect", "unexpected",
+                            "crash", "error", "exception", "broken", "not working", "not found", "trace" };
             foreach (var k in kw) if (p.Contains(k)) return true;
             return false;
         }
 
-        // เจตนาเชิง runtime/debug → trigger auto-watch (ดูค่า field สดตอนเล่น)
         static bool IsRuntimeWatchIntent(string prompt)
         {
             if (string.IsNullOrEmpty(prompt)) return false;
             string p = prompt.ToLowerInvariant();
-            string[] kw = { "watch", "runtime", "ค่า", "value", "state", "สถานะ", "ติดตาม", "debug",
-                            "ทำไม", "ไม่ลด", "ไม่เพิ่ม", "ไม่เปลี่ยน", "ค้าง", "วิ่ง", "ตอนเล่น", "live",
-                            "bug", "บั๊ก", "บัค", "hp", "mp", "mana", "เลือด", "ชีวิต", "มานา", "ดูค่า" };
+            string[] kw = { "watch", "runtime", "value", "state", "track", "debug", "why", "not decreasing",
+                            "not increasing", "not changing", "stuck", "running", "play mode", "live", "bug",
+                            "hp", "mp", "mana", "health", "inspect value" };
             foreach (var k in kw) if (p.Contains(k)) return true;
             return false;
         }
 
-        // แนบ/ถอด ส่วน profiler (toggle) — Profiler / Network / GC แนบพร้อมกันได้หลายอัน
         void AttachPart(string label, string data)
         {
             var s = S;
-            if (s.attached.ContainsKey(label)) { s.attached.Remove(label); Repaint(); return; }   // กดซ้ำ = เอาออก
+            if (s.attached.ContainsKey(label)) { s.attached.Remove(label); Repaint(); return; }
             s.attached[label] = data;
             if (string.IsNullOrEmpty(s.draft.Trim()))
                 s.draft = "Analyze the attached Profiler data. Identify issues, rank by risk, and suggest fixes.";
@@ -2565,18 +2365,16 @@ namespace MCPBridge
             }
         }
 
-        // ── ส่ง prompt: ส่วนเบา (UI) ทำทันทีตอนคลิก, งานหนักเลื่อนไป tick ถัดไป → คลิก Send ไม่ค้าง ──
-        // คำตอบ health check ("ทดสอบ") — สถานะ server + รายการคำสั่งทั้งหมดจาก single source (ไม่เรียก AI)
         static string BuildHealthCheckReply()
         {
             var sb = new System.Text.StringBuilder();
             if (MCPServer.IsRunning)
             {
-                sb.AppendLine($"🟢 **สถานะ MCP Server ถูกเปิดแล้ว** — {MCPServer.Label} · port {MCPServer.Port} · Write {(MCPHandlers.AllowWrites ? "ON ✏" : "OFF (read-only)")}");
+                sb.AppendLine($"🟢 **AI Unity MCP Server is running** — {MCPServer.Label} · port {MCPServer.Port} · Write {(MCPHandlers.AllowWrites ? "ON ✏" : "OFF (read-only)")}");
                 sb.AppendLine();
                 var paths = MCPHandlers.CommandPaths();
-                sb.AppendLine($"## 📋 คำสั่งที่ใช้ได้ทั้งหมด ({paths.Count})");
-                sb.AppendLine("| # | คำสั่ง | path |");
+                sb.AppendLine($"## 📋 Available commands ({paths.Count})");
+                sb.AppendLine("| # | Command | Path |");
                 sb.AppendLine("|---|--------|------|");
                 int i = 1;
                 foreach (var p in paths)
@@ -2584,8 +2382,8 @@ namespace MCPBridge
             }
             else
             {
-                sb.AppendLine("🔴 **MCP Server ยังไม่เปิด**");
-                sb.AppendLine("เปิดที่แท็บ **Claude In → กดปุ่ม ▶ Start** แล้วพิมพ์ \"ทดสอบ\" อีกครั้งเพื่อยืนยัน");
+                sb.AppendLine("🔴 **AI Unity MCP Server is not running**");
+                sb.AppendLine("Open **Claude In**, press **▶ Start**, then enter \"test\" again to verify the connection.");
             }
             return sb.ToString().TrimEnd();
         }
@@ -2599,8 +2397,7 @@ namespace MCPBridge
             _showScriptList = false;
             _showPrefabList = false;
 
-            // ── "ทดสอบ" เดี่ยวๆ = health check ภายใน — เช็คสถานะ + รายการคำสั่งเอง ไม่ส่งเข้า Claude ──
-            if (prompt == "ทดสอบ" || prompt.Equals("test", StringComparison.OrdinalIgnoreCase))
+            if (prompt.Equals("test", StringComparison.OrdinalIgnoreCase))
             {
                 s.messages.Add(new ChatMessage("user", prompt));
                 s.messages.Add(new ChatMessage("assistant", BuildHealthCheckReply()));
@@ -2612,14 +2409,13 @@ namespace MCPBridge
                 return;
             }
 
-            // ── Gate: ต้องต่อ MCP ก่อน (server เปิด) — ไม่งั้นตอบกลับให้ไปกด Start ที่ Unity ──
             if (!MCPServer.IsRunning)
             {
                 s.messages.Add(new ChatMessage("user", prompt));
                 s.messages.Add(new ChatMessage("assistant",
-                    "🔴 **ยังไม่ได้เชื่อมต่อ MCP**\n\n" +
-                    "เปิดที่ **MCP Bridge → แท็บ Claude In → ▶ Start**\n" +
-                    "จุดสถานะบนหัวจะเปลี่ยนเป็น **online** สีเขียว แล้วพิมพ์อีกครั้งได้เลย"));
+                    "🔴 **AI Unity MCP Server is not connected**\n\n" +
+                    "Open **AI Unity MCP Server → Claude In → ▶ Start**.\n" +
+                    "When the header indicator turns green and reads **online**, submit the request again."));
                 s.draft = "";
                 s.images.Clear();
                 s.attached.Clear();
@@ -2630,18 +2426,15 @@ namespace MCPBridge
                 return;
             }
 
-            // snapshot attachments (จะถูกล้างทันที) + history (ก่อนเพิ่มข้อความปัจจุบัน)
             var imagesSnap = new List<AttachedImage>(s.images);
             var attachedSnap = new Dictionary<string, string>(s.attached);
             var historyTurns = BuildHistoryTurns(s);
 
-            // เพิ่มข้อความ user + placeholder ""ทันที"" → UI ตอบสนองเลย (note เติมตอน assemble เสร็จ)
             s.messages.Add(new ChatMessage("user", prompt));
             s.messages.Add(new ChatMessage("assistant", QUEUED));
             int userIndex = s.messages.Count - 2;
             int phIndex = s.messages.Count - 1;
 
-            // ล้าง input ทันที (พิมพ์ต่อได้เลย)
             s.draft = "";
             s.images.Clear();
             s.attached.Clear();
@@ -2649,12 +2442,10 @@ namespace MCPBridge
             _autoScroll = true;
             Repaint();
 
-            // เลื่อนงานหนัก (scripts/auto-gather/prefab inspect/resize) ไป tick ถัดไป → ไม่ค้างจังหวะคลิก
             var sc = s;
             EditorApplication.delayCall += () => EnqueueHeavy(sc, prompt, imagesSnap, attachedSnap, historyTurns, userIndex, phIndex);
         }
 
-        // งานหนัก — รัน tick ถัดไป (main thread, นอกจังหวะคลิก)
         void EnqueueHeavy(ChatSession s, string prompt, List<AttachedImage> images,
                           Dictionary<string, string> attached, List<ConversationTurn> historyTurns,
                           int userIndex, int phIndex)
@@ -2665,13 +2456,10 @@ namespace MCPBridge
                 foreach (var kv in attached)
                     fullPrompt += $"\n\n--- Unity Profiler data: {kv.Key} ---\n```\n" + kv.Value + "\n```";
 
-            // ข้าม auto-gather ถ้ามีข้อมูล profiler แนบมาแล้ว (เช่น Deep/Profiler) → ไม่ FindObjectsOfType ซ้ำ
-            // (perf_audit สแกนทั้ง scene บน main thread = เกมค้าง 1 เฟรม · มีข้อมูลแนบแล้วก็ไม่ต้องสแกนซ้ำ)
             var gathered = hasProfiler ? new List<KeyValuePair<string, string>>() : AutoGather(prompt);
             foreach (var g in gathered)
                 fullPrompt += $"\n\n--- Unity {g.Key} (auto-gathered) ---\n```json\n{g.Value}\n```";
 
-            // ── A2: หา prefab ที่ใช้ script ที่ @ มา (เฉพาะตอนถามเชิงวิเคราะห์) ──
             var prefabNames = new List<string>();
             var inspectedPrefabs = new HashSet<string>(System.StringComparer.OrdinalIgnoreCase);
             if (primaryScripts.Count > 0 && IsAnalysisIntent(prompt))
@@ -2687,16 +2475,14 @@ namespace MCPBridge
                 }
                 if (pfPaths.Count > 0)
                 {
-                    const int INSPECT_CAP = 4;   // ขยายจาก 2 → 4
-                    // smart select: เรียง prefab ตามความเกี่ยวข้องกับชื่อ script (ตรงชื่อ/ชื่อ script อยู่ในชื่อ prefab มาก่อน)
-                    // → inspect ตัวที่เกี่ยวสุด ไม่ใช่ 2 ตัวแรกตามลำดับไฟล์ (ใช้ List.Sort เลี่ยง Linq)
+                    const int INSPECT_CAP = 4;
                     pfPaths.Sort((a, b) =>
                     {
                         int ra = PrefabRelevance(System.IO.Path.GetFileNameWithoutExtension(a), primaryScripts);
                         int rb = PrefabRelevance(System.IO.Path.GetFileNameWithoutExtension(b), primaryScripts);
-                        if (ra != rb) return rb - ra;   // มาก → น้อย (เกี่ยวสุดก่อน)
+                        if (ra != rb) return rb - ra;
                         return System.IO.Path.GetFileNameWithoutExtension(a).Length
-                             - System.IO.Path.GetFileNameWithoutExtension(b).Length;   // สั้นกว่าก่อน (canonical)
+                             - System.IO.Path.GetFileNameWithoutExtension(b).Length;
                     });
                     int inspected = 0;
                     foreach (var pf in pfPaths)
@@ -2708,26 +2494,23 @@ namespace MCPBridge
                             string report = PrefabInspector.Inspect(pf);
                             if (!string.IsNullOrEmpty(report))
                             {
-                                fullPrompt += $"\n\n--- Prefab contents: {pname} (script {string.Join("/", primaryScripts)} แปะอยู่บน prefab นี้) ---\n```\n{report}\n```";
+                                fullPrompt += $"\n\n--- Prefab contents: {pname} (scripts {string.Join("/", primaryScripts)} are attached to this prefab) ---\n```\n{report}\n```";
                                 inspectedPrefabs.Add(pf);
                                 inspected++;
                             }
                         }
                     }
                     if (pfPaths.Count > INSPECT_CAP)
-                        fullPrompt += $"\n\n(+ prefab อื่นที่ใช้ script นี้อีก {pfPaths.Count - INSPECT_CAP} ตัว — inspect {INSPECT_CAP} ตัวที่เกี่ยวสุดกัน context บวม)";
+                        fullPrompt += $"\n\n(+ {pfPaths.Count - INSPECT_CAP} more prefabs use this script; inspected the {INSPECT_CAP} most relevant to limit context size.)";
                 }
                 else if (PrefabIndex.Building)
                 {
-                    fullPrompt += "\n\n(prefab index กำลัง build — ครั้งนี้ยังไม่มีข้อมูล prefab ถามซ้ำได้)";
+                    fullPrompt += "\n\n(The prefab index is still building. Prefab details are unavailable for this request; retry shortly.)";
                 }
             }
 
-            // ── Phase 2 #3: auto runtime-watch — ปิดไว้ (BFS อ่าน property getter ทั้ง graph = เสี่ยง crash) ──
-            // TODO: ออกแบบใหม่ให้ปลอดภัย (ไม่ invoke getter เป็นชุด) ก่อนเปิดใช้
             // if (primaryScripts.Count > 0 && Application.isPlaying && IsRuntimeWatchIntent(prompt)) { ... WatchAuto.AutoWatch ... }
 
-            // ── A3: #prefab mention → inspect เนื้อใน prefab ──
             var prefabMentions = new List<string>();
             foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(prompt, @"#\[([^\]]+)\]|#([A-Za-z0-9_]+)"))
             {
@@ -2743,7 +2526,6 @@ namespace MCPBridge
                 inspectedPrefabs.Add(path);
             }
 
-            // เตรียมรูป (resize + base64)
             var payloadImages = new List<ClaudeImage>();
             foreach (var img in images)
             {
@@ -2758,7 +2540,6 @@ namespace MCPBridge
                 }
             }
 
-            // note → เติมเข้าข้อความ user ที่แสดงไปแล้ว
             string note = "";
             if (images.Count > 0) note += $"\n<i>[{images.Count} image(s) attached]</i>";
             if (primaryScripts.Count > 0)
@@ -2787,8 +2568,6 @@ namespace MCPBridge
             if (!s.pumping) PumpQueue(s);
         }
 
-        // สร้าง history เป็น proper turns สำหรับ multi-turn API (ล่าสุด N เทิร์น)
-        // ต้อง user/assistant สลับกัน และต้องจบด้วย assistant (เพื่อให้ current user message ต่อได้)
         static List<ConversationTurn> BuildHistoryTurns(ChatSession s, int maxTurns = 6)
         {
             var result = new List<ConversationTurn>();
@@ -2798,29 +2577,23 @@ namespace MCPBridge
             for (int i = start; i < s.messages.Count; i++)
             {
                 var m = s.messages[i];
-                // ข้าม placeholder/meta
                 if (m.Content == THINKING || m.Content == QUEUED || m.Content.StartsWith("⏳")) continue;
                 if (m.Role != "user" && (m.Content.StartsWith("✅") || m.Content.StartsWith("⚠️") || m.Content.StartsWith("❌")))
                     continue;
 
-                // บังคับ alternating: ถ้า role ซ้ำกับตัวสุดท้าย → แทนที่ (เก็บตัวล่าสุดไว้)
                 if (result.Count > 0 && result[result.Count - 1].Role == m.Role)
                     result.RemoveAt(result.Count - 1);
 
                 result.Add(new ConversationTurn { Role = m.Role, Content = m.Content });
             }
 
-            // history ต้องจบด้วย assistant → current user message จะ alternate ถูกต้อง
             while (result.Count > 0 && result[result.Count - 1].Role == "user")
                 result.RemoveAt(result.Count - 1);
 
             return result;
         }
 
-        // FireArtRequest ถูกลบ — ใช้ 1 request แทน AI ส่ง CATEGORIES: header มาเอง
-        // Unity parse header → RoleView() ตัดสินว่า role ไหนเห็น
 
-        // ── ประมวลผล queue ของ session ทีละอัน (แต่ละ tab pump แยกกัน) ──────
         async void PumpQueue(ChatSession s)
         {
             s.pumping = true;
@@ -2831,25 +2604,20 @@ namespace MCPBridge
                 s.requestStart = EditorApplication.timeSinceStartup;
                 s.cts = new System.Threading.CancellationTokenSource();
                 var token = s.cts.Token;
-                _pending.Enqueue(() => SetMessage(s, item.PlaceholderIndex, "assistant", THINKING));  // marker (apply ตอน Layout)
+                _pending.Enqueue(() => SetMessage(s, item.PlaceholderIndex, "assistant", THINKING));
                 Repaint();
 
-                // ── Single request — ส่ง role ปัจจุบันให้ API ใช้ system prompt ที่ถูก
-                //    AI จัด CATEGORIES: header มาเอง Unity parse → แสดงตาม role ──
                 int curRole = CurrentRole();
                 ClaudeResponse response;
                 try
                 {
-                    // ── CLI session rotation: จำได้ MAX_RESUME_TURNS turn แล้วเริ่ม session ใหม่ ──
-                    //    follow-up ภายใน N turn ยังจำได้ / ครบ N → fresh → context รีเซ็ตกลับ baseline
-                    //    (กัน perf_audit/profiler ส่ง JSON ก้อนใหญ่สะสมใน --resume เดิมไม่หยุด)
-                    const int MAX_RESUME_TURNS = 5;   // warm resume เร็วกว่า cold ~2 เท่า — 5 turn ค่อยรีเซ็ต (สืบยาวไม่ลืมกลางทาง)
+                    const int MAX_RESUME_TURNS = 5;
                     string resumeId = s.cliSessionId;
                     if (s.backend == 1 && s.cliTurnCount >= MAX_RESUME_TURNS)
                     {
                         resumeId = null;
                         s.cliTurnCount = 0;
-                        UnityEngine.Debug.Log($"[MCP] CLI session หมุนใหม่ (ครบ {MAX_RESUME_TURNS} turn) → context รีเซ็ต");
+                        UnityEngine.Debug.Log($"[AI Unity MCP Server] Started a new CLI session after {MAX_RESUME_TURNS} turns; context reset.");
                     }
 
                     response = s.backend == 1
@@ -2863,14 +2631,13 @@ namespace MCPBridge
                 }
                 catch (OperationCanceledException)
                 {
-                    response = new ClaudeResponse { Error = "ยกเลิกแล้ว (cancelled)" };
+                    response = new ClaudeResponse { Error = "Cancelled" };
                 }
 
                 s.isLoading = false;
                 s.cts?.Dispose();
                 s.cts = null;
 
-                // เติมคำตอบลง placeholder (ใต้ prompt ที่ถาม) + ผล execute ต่อท้ายในก้อนเดียว
                 string content, stat = null;
                 if (response.IsError)
                     content = $"❌ {response.Error}";
@@ -2879,35 +2646,32 @@ namespace MCPBridge
                     content = response.Text;
                     if (response.HasCommand)
                     {
-                        // รันบน background thread (เหมือน HTTP server) → command หนักไม่ freeze GUI
                         string execResult = await System.Threading.Tasks.Task.Run(() => ExecuteCommand(s, response.CommandJson));
                         string cmdName = ExtractCommandName(response.CommandJson);
                         bool execErr = execResult.StartsWith("⚠️") || execResult.Contains("\"error\"");
 
                         if (!execErr && _dataCommands.Contains(cmdName))
                         {
-                            // ── round 2: data command → ส่งผลกลับให้ AI สรุปอ่านง่าย (ไม่โชว์ JSON ดิบ) ──
                             _pending.Enqueue(() => SetMessage(s, item.PlaceholderIndex, "assistant", THINKING));
                             Repaint();
 
-                            // capture_screenshot → แนบ "รูปจริง" ให้ AI เห็น (ไม่ใช่แค่ path)
                             List<ClaudeImage> followImages = null;
                             string fp;
                             if (cmdName == "capture_screenshot")
                             {
                                 string shotPath = ExtractScreenshotPath(execResult);
                                 followImages = BuildScreenshotImages(shotPath);
-                                fp = $"คำถามเดิมของผู้ใช้: {item.RawPrompt}\n\n" +
+                                fp = $"Original user request: {item.RawPrompt}\n\n" +
                                      (followImages != null
-                                        ? "นี่คือ screenshot จาก Unity (แนบรูปมาด้วย) — วิเคราะห์สิ่งที่เห็นในภาพเพื่อตอบคำถามเดิมของผู้ใช้ เป็นภาษาไทย ตามรูปแบบ Header(Dev)/Header(Art)"
-                                        : $"จับ screenshot แล้วแต่โหลดรูปไม่ได้ ({EscapeForPrompt(execResult)}) — แจ้งผู้ใช้สั้นๆ");
+                                        ? "This is a Unity screenshot. Analyze what is visible and answer the original request using Header(Dev)/Header(Art)."
+                                        : $"The screenshot was captured but could not be loaded ({EscapeForPrompt(execResult)}). Briefly inform the user.");
                             }
                             else
                             {
-                                fp = $"คำถามเดิมของผู้ใช้: {item.RawPrompt}\n\n" +
-                                     $"นี่คือผลลัพธ์ JSON จากคำสั่ง {cmdName} ของ Unity:\n{execResult}\n\n" +
-                                     "วิเคราะห์ผลนี้ \"โดยตอบคำถามเดิมของผู้ใช้\" เป็นภาษาไทย ตามรูปแบบ Header(Dev)/Header(Art) — " +
-                                     "ห้ามแสดง JSON ดิบ ให้จัดกลุ่ม/นับ/ชี้ประเด็นที่น่าสนใจแทน";
+                                fp = $"Original user request: {item.RawPrompt}\n\n" +
+                                     $"This is the JSON result of Unity command {cmdName}:\n{execResult}\n\n" +
+                                     "Analyze the result while answering the original request using Header(Dev)/Header(Art). " +
+                                     "Do not display raw JSON; group and count the data and highlight meaningful findings.";
                             }
                             ClaudeResponse follow;
                             try
@@ -2916,28 +2680,26 @@ namespace MCPBridge
                                     ? await ClaudeCliClient.SendAsync(fp, followImages, token, s.cliSessionId, curRole)
                                     : await ClaudeAPIClient.SendAsync(fp, followImages, token, curRole, item.History);
                                 if (s.backend == 1 && !string.IsNullOrEmpty(follow?.SessionId))
-                                    s.cliSessionId = follow.SessionId;   // ไม่ ++cliTurnCount (round เดียวกับ user)
+                                    s.cliSessionId = follow.SessionId;
                             }
-                            catch (OperationCanceledException) { follow = new ClaudeResponse { Error = "ยกเลิกแล้ว" }; }
+                            catch (OperationCanceledException) { follow = new ClaudeResponse { Error = "Cancelled" }; }
 
                             if (follow != null && !follow.IsError && !string.IsNullOrEmpty(follow.Text))
                                 content = string.IsNullOrEmpty(response.Text) ? follow.Text : response.Text + "\n\n" + follow.Text;
                             else
-                                content += "\n\n" + execResult;   // สรุปไม่ได้ → fallback โชว์ผลดิบ
+                                content += "\n\n" + execResult;
                         }
                         else
                         {
-                            content += "\n\n" + execResult;   // action command → ✅ ตามเดิม
+                            content += "\n\n" + execResult;
                         }
                     }
 
-                    // สถิติ: เวลา + token (CLI) — เก็บแยก แสดงข้างชื่อ CLAUDE
                     double sec = EditorApplication.timeSinceStartup - s.requestStart;
                     stat = $"⏱ {FmtTime(sec)}";
                     if (s.backend == 1 && ClaudeCliClient.LiveOutputTokens > 0)
                         stat += $" · {ClaudeCliClient.LiveOutputTokens:N0} tokens";
                 }
-                // apply ตอน Layout เท่านั้น (กัน layout เพี้ยนระหว่างวาด)
                 int idx = item.PlaceholderIndex; string c = content, st = stat;
                 _pending.Enqueue(() => SetMessage(s, idx, "assistant", c, st));
 
@@ -2945,53 +2707,45 @@ namespace MCPBridge
                 Repaint();
             }
             s.pumping = false;
-            SaveHistory(s);   // เซฟครั้งเดียวหลังคิวหมด (ไม่เขียน EditorPrefs ทุกข้อความ = ไม่กระตุก)
+            SaveHistory(s);
             Repaint();
         }
 
-        // ยกเลิกงานปัจจุบัน + ล้างคิวทั้งหมดของ tab นั้น
         void StopSession(ChatSession s)
         {
-            // mark queued placeholders เป็นยกเลิก
             foreach (var q in s.queue)
                 if (q.PlaceholderIndex >= 0 && q.PlaceholderIndex < s.messages.Count)
-                    s.messages[q.PlaceholderIndex] = new ChatMessage("assistant", "❌ ยกเลิกแล้ว");
+                    s.messages[q.PlaceholderIndex] = new ChatMessage("assistant", "❌ Cancelled");
             s.queue.Clear();
             s.cts?.Cancel();
-            s.cliSessionId = null;   // turn ถูกตัดกลางคัน → ไม่ resume ต่อ (กัน context ค้างครึ่ง)
+            s.cliSessionId = null;
             s.cliTurnCount = 0;
             Repaint();
         }
 
-        // ยกเลิก prompt ที่รอคิวอยู่ทีละอัน (ตาม placeholder index)
         void CancelQueued(ChatSession s, int placeholderIndex)
         {
-            // rebuild queue ตัดอันที่ยกเลิกออก
             var keep = new Queue<QueuedItem>();
             while (s.queue.Count > 0)
             {
                 var q = s.queue.Dequeue();
                 if (q.PlaceholderIndex == placeholderIndex)
-                    s.messages[placeholderIndex] = new ChatMessage("assistant", "❌ ยกเลิกแล้ว");
+                    s.messages[placeholderIndex] = new ChatMessage("assistant", "❌ Cancelled");
                 else keep.Enqueue(q);
             }
             while (keep.Count > 0) s.queue.Enqueue(keep.Dequeue());
             Repaint();
         }
 
-        // execute command → คืนผลเป็น string (ให้ pump เอาไปต่อท้ายคำตอบในก้อนเดียว)
-        // command ที่ "คืนข้อมูล" (ต้องให้ AI สรุปอ่านง่าย) — ตรงข้ามกับ action (create/set → แค่ ✅)
         static readonly HashSet<string> _dataCommands = new HashSet<string>
         {
             "count_components","find_asset","inspect_object","scene_hierarchy","scene_list",
             "read_console","read_logfile","capture_state","perf_audit","perf_worst",
             "refactor_audit","audit_textures","audit_unused","audit_empty_folders",
             "memory_snapshot","fusion_stats","get_exceptions","watch_get","read_script",
-            "capture_screenshot",   // round-2 แนบรูปจริงให้ AI วิเคราะห์ (ไม่ใช่แค่ path)
+            "capture_screenshot",
         };
 
-        // คะแนนความเกี่ยวข้องของ prefab กับ script ที่ @ มา (ชื่อตรง/ชื่อ script อยู่ในชื่อ prefab = เกี่ยวมาก)
-        // ใช้ smart-select prefab ที่จะ inspect → เลือกตัวที่น่าจะใช่ ไม่ใช่ 2 ตัวแรกตามลำดับไฟล์
         static int PrefabRelevance(string prefabName, List<string> scripts)
         {
             if (string.IsNullOrEmpty(prefabName) || scripts == null) return 0;
@@ -3003,9 +2757,9 @@ namespace MCPBridge
                 string sb = s.ToLowerInvariant();
                 if (sb.EndsWith(".cs")) sb = sb.Substring(0, sb.Length - 3);
                 if (sb.Length < 2) continue;
-                if (pn == sb)            best = Math.Max(best, 100);          // ชื่อตรงเป๊ะ
-                else if (pn.Contains(sb)) best = Math.Max(best, 50 + sb.Length); // prefab มีชื่อ script (เจาะจง)
-                else if (sb.Contains(pn)) best = Math.Max(best, 30);          // script มีชื่อ prefab
+                if (pn == sb)            best = Math.Max(best, 100);
+                else if (pn.Contains(sb)) best = Math.Max(best, 50 + sb.Length);
+                else if (sb.Contains(pn)) best = Math.Max(best, 30);
             }
             return best;
         }
@@ -3030,7 +2784,6 @@ namespace MCPBridge
             }
         }
 
-        // แทนที่ข้อความที่ index — ถ้า index หลุด (เช่นกด Clear ระหว่างคิด) → drop ทิ้ง (ไม่ append stray)
         static void SetMessage(ChatSession s, int index, string role, string content, string stat = null)
         {
             if (index < 0 || index >= s.messages.Count) return;
@@ -3038,11 +2791,9 @@ namespace MCPBridge
             s.messages[index] = new ChatMessage(role, content) { Stat = stat };
         }
 
-        // single source ของ map ชื่อ→path อยู่ที่ MCPHandlers.CmdAlias (กัน drift กับ Dispatch)
         static string CommandJsonToPath(string json)
             => MCPHandlers.ResolvePath(ExtractCommandName(json));
 
-        // ดึง path ของ screenshot จากผล execResult (JSON มี backslash escaped → unescape)
         static string ExtractScreenshotPath(string execResult)
         {
             if (string.IsNullOrEmpty(execResult)) return null;
@@ -3051,7 +2802,6 @@ namespace MCPBridge
             return m.Groups[1].Value.Replace("\\\\", "\\").Replace("\\\"", "\"");
         }
 
-        // อ่านไฟล์ PNG → ClaudeImage (resize ให้พอดี API) เพื่อแนบให้ AI วิเคราะห์ภาพ round-2
         static List<ClaudeImage> BuildScreenshotImages(string path)
         {
             if (string.IsNullOrEmpty(path) || !File.Exists(path)) return null;
@@ -3082,17 +2832,15 @@ namespace MCPBridge
             [NonSerialized] public bool isLoading;
             [NonSerialized] public bool pumping;
             [NonSerialized] public List<AttachedImage> images = new List<AttachedImage>();
-            // ข้อมูล profiler ที่แนบ — แยกเป็นส่วนๆ (Profiler/Network/GC) แนบหลายอันใน prompt เดียวได้
             [NonSerialized] public Dictionary<string, string> attached = new Dictionary<string, string>();
-            [NonSerialized] public string cliSessionId;   // session ของ CLI (--resume → warm, ไม่ cold start)
-            [NonSerialized] public int cliTurnCount;       // นับ turn ที่ resume session เดิม — ครบ N → หมุน session ใหม่ (กัน context สะสม)
+            [NonSerialized] public string cliSessionId;
+            [NonSerialized] public int cliTurnCount;
             [NonSerialized] public Queue<QueuedItem> queue = new Queue<QueuedItem>();
             [NonSerialized] public System.Threading.CancellationTokenSource cts;
-            [NonSerialized] public double requestStart;   // เวลาเริ่ม request ปัจจุบัน
+            [NonSerialized] public double requestStart;
 
             public bool Busy => isLoading || queue.Count > 0;
 
-            // เรียกหลัง domain reload — กัน NonSerialized fields เป็น null
             public void Reinit()
             {
                 isLoading = false;
@@ -3109,17 +2857,13 @@ namespace MCPBridge
         class QueuedItem
         {
             public string FullPrompt;
-            public string RawPrompt;       // คำถามดิบของ user (ไม่มี attachment) — ให้ round-2 summarizer เห็นบริบท
+            public string RawPrompt;
             public List<ClaudeImage> Images;
-            public int PlaceholderIndex;   // index ของ bubble คำตอบ (อยู่ใต้ prompt อันนี้)
+            public int PlaceholderIndex;
             public List<ConversationTurn> History;
         }
 
-        // ── Role parser: หา Header(Dev) หรือ Header(Art) แล้ว extract content ──
-        // คืน null ถ้าไม่มี header ของ role นั้นใน response
         // ── Role parser v2 ──────────────────────────────────────────────────
-        // marker หลัก: "Header(Dev)" บนบรรทัดของตัวเอง — line-anchored กัน "Header(" ในโค้ด/คำพูดหลอก parser
-        // ยอม decoration: เว้นวรรคในวงเล็บ, **ตัวหนา**, ##, > นำหน้า/ตามหลัง
         static readonly System.Text.RegularExpressions.Regex _headerRe =
             new System.Text.RegularExpressions.Regex(
                 @"(?m)^[ \t>*#]*Header\s*\(\s*(Dev|Art)\s*\)[ \t*:]*\r?$",
@@ -3128,7 +2872,6 @@ namespace MCPBridge
         static bool HasHeaderMarkers(string content)
             => !string.IsNullOrEmpty(content) && _headerRe.IsMatch(content);
 
-        // คืน section ของ role — รวมทุกก้อนถ้า role เดียวกันโผล่หลายครั้ง · null = ไม่มี section ของ role นี้
         static string ExtractHeaderContent(string content, string role)
         {
             if (string.IsNullOrEmpty(content)) return null;
@@ -3146,15 +2889,11 @@ namespace MCPBridge
             return sb.Length == 0 ? null : sb.ToString().Trim();
         }
 
-        // ── Parser สำรอง: model บางทีไม่ส่ง Header() แต่ใช้หัวแบบ "💻 Dev — ..." / "## Art: ..." ──
-        // prefix ได้เฉพาะ decoration (emoji/#/*/>/ช่องว่าง — ห้ามตัวอักษร/ไทย กัน "ฝั่ง Dev —" กลางประโยค)
         static readonly System.Text.RegularExpressions.Regex _altRoleRe =
             new System.Text.RegularExpressions.Regex(
-                @"(?m)^[^\w฀-๿\r\n]{0,8}(Dev|Art)\b[*_]*\s*(?:[—–:：]|-\s)",
-                System.Text.RegularExpressions.RegexOptions.IgnoreCase);   // hyphen เปล่าต้องมี space ตาม (กัน "Dev-branch")
+                @"(?m)^[^\w\u0E00-\u0E7F\r\n]{0,8}(Dev|Art)\b[*_]*\s*(?:[—–:：]|-\s)",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
 
-        // คืน null = ทั้งข้อความไม่มี marker เลย (caller fallback แสดงทั้งก้อน)
-        // คืน ""   = มี marker แต่ไม่มี section ของ role นี้ (caller โชว์ "ไม่มีข้อมูล")
         static string ExtractAltRoleSection(string content, string roleName)
         {
             if (string.IsNullOrEmpty(content)) return null;
@@ -3164,23 +2903,20 @@ namespace MCPBridge
             for (int i = 0; i < ms.Count; i++)
             {
                 if (!string.Equals(ms[i].Groups[1].Value, roleName, StringComparison.OrdinalIgnoreCase)) continue;
-                int start = ms[i].Index;                                        // รวมบรรทัดหัวไว้ (เป็น heading สี)
-                int end = i + 1 < ms.Count ? ms[i + 1].Index : content.Length;  // ถึง marker ถัดไป/จบ
+                int start = ms[i].Index;
+                int end = i + 1 < ms.Count ? ms[i + 1].Index : content.Length;
                 string part = content.Substring(start, end - start).Trim();
                 if (part.Length > 0) sb.Append(part).Append("\n\n");
             }
             return sb.Length == 0 ? "" : sb.ToString().Trim();
         }
 
-        // เนื้อหาบางเกินจริง (ว่าง / มีแต่ markdown เปล่า) → ถือว่าไม่มีข้อมูล
-        // คำตอบสั้นแต่มีสาระ (มีตัวเลข / status emoji เช่น "✅ ไม่มี error") = ไม่ thin
         static bool IsThinContent(string s)
         {
             if (string.IsNullOrWhiteSpace(s)) return true;
-            if (System.Text.RegularExpressions.Regex.IsMatch(s, @"[0-9๐-๙]|✓|✔|✅|❌|⚠|🔴|🟡|🟢")) return false;
+            if (System.Text.RegularExpressions.Regex.IsMatch(s, @"[0-9]|✓|✔|✅|❌|⚠|🔴|🟡|🟢")) return false;
             string stripped = System.Text.RegularExpressions.Regex.Replace(
                 s, @"Category\([^)]*\)|Header\([^)]*\)|[#*`\-:\s]", "");
-            // thin = ไม่เหลือ "ตัวอักษร" เลย (คำตอบสั้นแต่มีสาระ เช่น "ปกติดี" ต้องรอด — ไทยสั้นเป็นปกติ)
             return !System.Text.RegularExpressions.Regex.IsMatch(stripped, @"\p{L}");
         }
 
@@ -3190,18 +2926,15 @@ namespace MCPBridge
             public string Role;
             public string Content;
             public string Stat;
-            public bool   IsDual;   // ยังคงไว้เพื่อ backward compat (serialize เดิม)
+            public bool   IsDual;
             public string ArtContent;
-            [NonSerialized] public bool collapsed;   // user message: พับซ่อน AI response ถัดไป
+            [NonSerialized] public bool collapsed;
             [NonSerialized] string _rich;
             [NonSerialized] float _height = -1, _heightWidth = -1;
             [NonSerialized] ChatMessage _devView;   // cached filtered view for Dev
             [NonSerialized] ChatMessage _artView;   // cached filtered view for Art
             public ChatMessage(string role, string content) { Role = role; Content = content; }
 
-            // Extract content ของ role นี้จาก Header(Dev)/Header(Art) blocks
-            // ถ้าไม่มี Header ของ role นี้ → แสดง "ไม่มีข้อมูล"
-            // ถ้าไม่มี Header เลย (fallback/old format) → แสดงทั้งหมด
             public ChatMessage RoleView(int role)
             {
                 if (Role == "user") return this;
@@ -3210,16 +2943,16 @@ namespace MCPBridge
                 if (cached != null) return cached;
 
                 string roleName = role == 0 ? "Dev" : "Art";
-                bool hasAnyHeader = HasHeaderMarkers(Content);   // line-anchored — "Header(" ในโค้ด/คำพูดไม่หลอกแล้ว
+                bool hasAnyHeader = HasHeaderMarkers(Content);
 
                 ChatMessage result;
                 string extracted = hasAnyHeader
                     ? ExtractHeaderContent(Content, roleName)
-                    : ExtractAltRoleSection(Content, roleName);   // ไม่มี Header() → ลองหัวแบบ "Dev —/Art —"
+                    : ExtractAltRoleSection(Content, roleName);
 
                 if (extracted == null && !hasAnyHeader)
                 {
-                    result = this;  // ไม่มี marker รูปแบบไหนเลย → fallback แสดงทั้งหมด
+                    result = this;
                 }
                 else if (!IsThinContent(extracted))
                 {
@@ -3228,7 +2961,7 @@ namespace MCPBridge
                 else
                 {
                     string label = role == 1 ? "Visual (Art)" : "Technical (Dev)";
-                    result = new ChatMessage(role.ToString(), "ℹ️ ไม่มีข้อมูลด้าน " + label + " สำหรับ prompt นี้") { Stat = Stat };
+                    result = new ChatMessage(role.ToString(), "ℹ️ No " + label + " data is available for this prompt.") { Stat = Stat };
                 }
 
                 if (role == 0) _devView = result;
@@ -3236,20 +2969,15 @@ namespace MCPBridge
                 return result;
             }
 
-            // ── ทาง B: ถ้า model ไม่ได้ทำตารางสรุป 🎯 มา → Unity สร้างจาก finding card เอง ──
-            // parse "## 🔴 #N — title ✓" + **จุด:** + **ค่าจริง:** → ตาราง ranking แทรกบนสุด
-            // → การันตีว่ามีตารางทุกครั้ง ไม่พึ่ง model (กันเคส CLI/model ข้าม instruction)
             static readonly System.Text.RegularExpressions.Regex _cardRe =
                 new System.Text.RegularExpressions.Regex(@"^\s*#{1,4}\s*(🔴|🟡|🟢)\s*#?\d*\s*[—\-–]\s*(.+?)\s*$");
 
             static string InjectSummaryTableIfMissing(string content)
             {
                 if (string.IsNullOrEmpty(content)) return content;
-                // model ทำตารางสรุปมาแล้วไหม → ไม่ inject ซ้ำ
-                // เช็ค "ตาราง ranking" จาก header แถวที่ขึ้นต้น | # | (ครอบทุก emoji: 🎯/📊/ไม่มี)
-                if (System.Text.RegularExpressions.Regex.IsMatch(content, @"(?m)^\s*\|\s*(#|ลำดับ)\s*\|")) return content;
-                if (content.IndexOf("เรียงตามความเสี่ยง", System.StringComparison.Ordinal) >= 0) return content;
-                if (content.IndexOf("เสี่ยงมาก→น้อย", System.StringComparison.Ordinal) >= 0) return content;
+                if (System.Text.RegularExpressions.Regex.IsMatch(content, @"(?m)^\s*\|\s*(#|order)\s*\|", System.Text.RegularExpressions.RegexOptions.IgnoreCase)) return content;
+                if (content.IndexOf("ordered by risk", System.StringComparison.OrdinalIgnoreCase) >= 0) return content;
+                if (content.IndexOf("highest to lowest risk", System.StringComparison.OrdinalIgnoreCase) >= 0) return content;
 
                 var lines = content.Replace("\r\n", "\n").Split('\n');
                 var rows = new System.Collections.Generic.List<string[]>();   // {n, emoji, title, conf, val, loc}
@@ -3275,18 +3003,18 @@ namespace MCPBridge
                         title = (cut >= 0 ? rest.Substring(0, cut) : rest).Trim().TrimEnd('—', '-', '–', ' ');
                         continue;
                     }
-                    if (emoji == null) continue;   // ยังไม่เข้า card แรก
+                    if (emoji == null) continue;
                     string t = raw.Trim();
-                    if (loc == null) loc = Field(t, "จุด");
-                    if (val == null) val = Field(t, "ค่าจริง");
+                    if (loc == null) loc = Field(t, "Location");
+                    if (val == null) val = Field(t, "Measured value");
                 }
                 Flush();
 
-                if (rows.Count < 2) return content;   // brain: ตารางเฉพาะเมื่อมี ≥ 2 finding
+                if (rows.Count < 2) return content;
 
                 var sb = new System.Text.StringBuilder();
-                sb.AppendLine("## 🎯 สรุป (เรียงตามความเสี่ยง)");
-                sb.AppendLine("| # | ปัญหา | สถานะ | ค่าจริง / budget | มั่นใจ | จุด |");
+                sb.AppendLine("## 🎯 Summary (ordered by risk)");
+                sb.AppendLine("| # | Finding | Status | Measured value / budget | Confidence | Location |");
                 sb.AppendLine("|---|-------|------|------------------|-------|-----|");
                 foreach (var r in rows)
                     sb.AppendLine($"| {r[0]} | {r[2]} | {r[1]} | {r[4]} | {r[3]} | {r[5]} |");
@@ -3294,14 +3022,12 @@ namespace MCPBridge
                 return sb.ToString() + content;
             }
 
-            // ดึงค่าหลัง "**field:**" หรือ "field:" (รองรับ : และ ：)
             static string Field(string line, string field)
             {
                 var m = System.Text.RegularExpressions.Regex.Match(line, @"^\**\s*" + field + @"\s*\**\s*[:：]\s*(.+)$");
                 return m.Success ? m.Groups[1].Value.Trim() : null;
             }
 
-            // ทำให้ลงตาราง markdown ได้ (ตัด | ** ` ออก + ตัดยาว)
             static string San(string s)
             {
                 if (string.IsNullOrEmpty(s)) return "—";
@@ -3312,7 +3038,6 @@ namespace MCPBridge
 
             public void InvalidateCaches() { _devView = null; _artView = null; }
 
-            // fade-in: จำเวลาที่โผล่ครั้งแรก แล้วคืน alpha 0→1 ใน ~0.28s
             [NonSerialized] double _shownAt = -1;
             public float FadeAlpha(double now)
             {
@@ -3321,23 +3046,19 @@ namespace MCPBridge
                 return t >= 1.0 ? 1f : (float)t;
             }
 
-            // ตัด Header(Dev)/Header(Art) markers ออกก่อนแสดง (ใช้ parse เท่านั้น ไม่โชว์ user)
             public string DisplayContent
             {
                 get
                 {
                     if (Role == "user" || string.IsNullOrEmpty(Content)) return Content;
-                    // ตัด "Header(Dev)" / "Header(Art)" บรรทัดที่เป็น marker ออก
                     var lines = Content.Split('\n');
                     var kept = new System.Collections.Generic.List<string>(lines.Length);
                     foreach (var line in lines)
                     {
                         string t = line.Trim();
-                        // marker (รวมแบบแต่งหนา/เว้นวรรค) + บรรทัด CATEGORIES routing → ไม่โชว์ user
                         if (_headerRe.IsMatch(t) ||
                             t.StartsWith("CATEGORIES:", System.StringComparison.OrdinalIgnoreCase))
                             continue;
-                        // marker ที่มีเนื้อหาตามบนบรรทัดเดียวกัน ("Header(Dev) สรุป: …") → ตัดเฉพาะ marker เก็บเนื้อหาไว้
                         if (t.StartsWith("Header(Dev)", System.StringComparison.OrdinalIgnoreCase) ||
                             t.StartsWith("Header(Art)", System.StringComparison.OrdinalIgnoreCase))
                         {
@@ -3345,7 +3066,6 @@ namespace MCPBridge
                             if (rest.Length > 0) kept.Add(rest);
                             continue;
                         }
-                        // ตัด markdown header เปล่า (#, ##, ### ที่ไม่มีข้อความตาม) — artifact ท้าย response
                         if (System.Text.RegularExpressions.Regex.IsMatch(t, @"^#{1,6}\s*$")) continue;
                         kept.Add(line);
                     }
@@ -3355,19 +3075,17 @@ namespace MCPBridge
 
             public string Rich()
             {
-                // ไม่ cache ถ้า DisplayContent ต่างจาก Content (มี CATEGORIES: header ที่ต้องตัด)
                 if (_rich == null || (_cachedRichFor != DisplayContent))
                 {
                     _cachedRichFor = DisplayContent;
                     _rich = Role == "user" ? Content : MarkdownColor.ToRichText(DisplayContent);
-                    _segs = null;     // invalidate segment cache ด้วย
-                    _height = -1;     // ⚠ ความสูงผูกกับเนื้อหาเก่า — ไม่ reset = กล่องโย่ง/หด text ไม่ตรง (บั๊กสลับ role แล้วเอ๋อ)
+                    _segs = null;
+                    _height = -1;
                 }
                 return _rich;
             }
             [NonSerialized] string _cachedRichFor;
 
-            // cache ความสูง — คำนวณใหม่เฉพาะตอน width เปลี่ยน (ไม่ใช่ทุกเฟรม)
             public float Height(GUIStyle style, float width)
             {
                 if (_height < 0 || !Mathf.Approximately(_heightWidth, width))
@@ -3378,9 +3096,7 @@ namespace MCPBridge
                 return _height;
             }
 
-            // ── แยกข้อความเป็น segment: text ปกติ / code block (```...```) ──
             [NonSerialized] List<Seg> _segs;
-            // ต้อง render แบบ segment (code box หรือ table) ไม่ใช่ fast-path label เดียว
             public bool HasRich { get { Parse(); return _hasCode || _hasTable; } }
             [NonSerialized] bool _hasCode, _hasTable;
 
@@ -3398,7 +3114,7 @@ namespace MCPBridge
                 var parts = DisplayContent.Split(new[] { "```" }, System.StringSplitOptions.None);
                 for (int i = 0; i < parts.Length; i++)
                 {
-                    if (i % 2 == 0) // text (อาจมีตารางปนอยู่)
+                    if (i % 2 == 0)
                     {
                         AddTextSegs(parts[i]);
                     }
@@ -3417,7 +3133,6 @@ namespace MCPBridge
                 if (_segs.Count == 0) _segs.Add(new Seg { Code = false, Rendered = Rich() });
             }
 
-            // แยกข้อความปกติออกเป็น text seg กับ table seg (จับบล็อกบรรทัดที่มี '|' ติดกัน ≥2)
             void AddTextSegs(string text)
             {
                 if (string.IsNullOrEmpty(text) || text.Trim().Length == 0) return;
@@ -3456,7 +3171,6 @@ namespace MCPBridge
                 return t.Length > 0 && t.IndexOf('|') >= 0;
             }
 
-            // แตกเซลล์จากบรรทัด: split '|' แล้ว trim, ตัด cell ว่างหัว/ท้าย (จาก pipe ขอบ)
             static List<string> SplitCells(string line)
             {
                 var raw = new List<string>(line.Split('|'));
@@ -3466,7 +3180,6 @@ namespace MCPBridge
                 return raw;
             }
 
-            // บรรทัดคั่น header ของ markdown (|---|:--:|) → ข้าม
             static bool IsSeparatorRow(List<string> cells)
             {
                 if (cells.Count == 0) return false;
@@ -3478,7 +3191,6 @@ namespace MCPBridge
                 return true;
             }
 
-            // เซลล์ตาราง: ขาวล้วน อ่านง่าย — แปลงแค่ **bold** กับ `code`, ไม่ลงสี markdown เต็ม
             static string CleanCell(string s)
             {
                 if (string.IsNullOrEmpty(s)) return "";
@@ -3507,7 +3219,6 @@ namespace MCPBridge
 
             static string ExtractHeader(string code, string lang)
             {
-                // หา path .cs จาก // FILE: หรือบรรทัดแรกที่เป็น path
                 var m = System.Text.RegularExpressions.Regex.Match(code, @"//\s*FILE:\s*(\S+)");
                 if (m.Success) return m.Groups[1].Value;
                 var m2 = System.Text.RegularExpressions.Regex.Match(code, @"(Assets/[\w/]+\.cs)");
@@ -3519,12 +3230,12 @@ namespace MCPBridge
         class Seg
         {
             public bool Code;
-            public bool Table;        // เป็นตาราง markdown (| .. | .. |)
-            public bool Collapsed;    // พับ box อยู่ (toggle จาก header)
-            public string Rendered;   // rich text (text หรือ highlighted code)
-            public string Raw;        // code ดิบ (สำหรับ copy)
-            public string Header;     // path/lang ของ code block
-            public List<string[]> Rows;   // เซลล์ของตาราง (rich text แล้ว) แถวแรก = header
+            public bool Table;
+            public bool Collapsed;
+            public string Rendered;
+            public string Raw;
+            public string Header;
+            public List<string[]> Rows;
             public int Cols;
             public float Height = -1;
         }

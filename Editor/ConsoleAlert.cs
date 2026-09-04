@@ -7,9 +7,6 @@ using UnityEngine;
 namespace MCPBridge
 {
     /// <summary>
-    /// console_alert — ดัก Debug.Log/Warning/Error ที่ตรง pattern (substring, ไม่สน case)
-    /// นับจำนวน + เก็บ 10 ข้อความล่าสุด. เหมือน watch_alert แต่กับ console.
-    /// ใช้จับ error/warning ที่หลุดมาเป็นช่วงตอนเล่น (ที่ read_console อาจพลาดเพราะเลื่อนหาย).
     /// </summary>
     [InitializeOnLoad]
     public static class ConsoleAlert
@@ -19,7 +16,7 @@ namespace MCPBridge
             public string pattern;
             public string level;       // all | warning | error
             public int count;
-            public readonly List<string> recent = new List<string>();   // 10 ข้อความล่าสุดที่ตรง
+            public readonly List<string> recent = new List<string>();
         }
 
         static readonly List<Pat> _pats = new List<Pat>();
@@ -30,7 +27,6 @@ namespace MCPBridge
         {
             Application.logMessageReceived -= OnLog;
             Application.logMessageReceived += OnLog;
-            // ล้างตอนเข้า Play ใหม่ (เริ่มนับสด)
             EditorApplication.playModeStateChanged += s =>
             {
                 if (s == PlayModeStateChange.EnteredPlayMode)
@@ -65,7 +61,7 @@ namespace MCPBridge
             lock (_lock)
             {
                 foreach (var p in _pats)
-                    if (p.pattern == pattern) { p.level = level; return null; }   // อัปเดต level เดิม
+                    if (p.pattern == pattern) { p.level = level; return null; }
                 _pats.Add(new Pat { pattern = pattern, level = level });
             }
             return null;

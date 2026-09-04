@@ -11,10 +11,8 @@ using UnityEngine.Profiling;
 
 namespace MCPBridge
 {
-    // Core Assist Pack — ให้ AI "มองเห็น" สถานะจริง + "ลงมือแก้" ของที่มีอยู่
     public static partial class MCPHandlers
     {
-        // ── อ่าน Console (error/warning/log จริง) ผ่าน LogEntries reflection ──
         static string ReadConsole(string body)
         {
             var data = string.IsNullOrEmpty(body) ? new ConsoleRequest() : ParseReq<ConsoleRequest>(body);
@@ -60,8 +58,6 @@ namespace MCPBridge
             });
         }
 
-        // ── Inspect object — อ่าน component + ค่าทั้งหมด ──────────────────────
-        // deep=true → ใช้ reflection อ่าน private field + public property ทุกตัว
         static string InspectObject(string body)
         {
             var data = ParseReq<InspectRequest>(body);
@@ -95,7 +91,6 @@ namespace MCPBridge
             });
         }
 
-        // Deep reflection: อ่าน private/public fields + public properties (skip indexers + compiler-generated)
         static string ComponentPropsDeep(Component c)
         {
             var sb = new StringBuilder("{");
@@ -145,7 +140,6 @@ namespace MCPBridge
             return sb.ToString();
         }
 
-        // อ่าน serialized properties ของ component (จำกัดเพื่อกัน output ยาว)
         static string ComponentProps(Component c)
         {
             try
@@ -205,7 +199,6 @@ namespace MCPBridge
             });
         }
 
-        // ── Set property — แก้ค่าใน component (HP=100, speed=5, ฯลฯ) ──────────
         static string SetProperty(string body)
         {
             var data = ParseReq<SetPropertyRequest>(body);
@@ -224,7 +217,7 @@ namespace MCPBridge
                         ?? FindByDisplayName(so, data.property);
                 if (prop == null) return $"{{\"error\":\"Property not found: {EscapeJson(data.property)}\"}}";
 
-                Undo.RecordObject(comp, "MCP SetProperty");
+                Undo.RecordObject(comp, "AI Unity MCP Server Set Property");
                 if (!ApplyValue(prop, data.value)) return $"{{\"error\":\"unsupported property type for '{EscapeJson(data.property)}'\"}}";
                 so.ApplyModifiedProperties();
                 EditorUtility.SetDirty(comp);
@@ -267,7 +260,6 @@ namespace MCPBridge
             catch { return false; }
         }
 
-        // ── Set transform — ย้าย/หมุน/scale ของที่มีอยู่ ─────────────────────
         static string SetTransform(string body)
         {
             var data = ParseReq<SetTransformRequest>(body);
@@ -276,7 +268,7 @@ namespace MCPBridge
                 var go = GameObject.Find(data.name);
                 if (go == null) return $"{{\"error\":\"Not found: {EscapeJson(data.name)}\"}}";
 
-                Undo.RecordObject(go.transform, "MCP SetTransform");
+                Undo.RecordObject(go.transform, "AI Unity MCP Server Set Transform");
                 string set = (data.set ?? "").ToLower();
                 if (set.Contains("pos"))   go.transform.localPosition    = new Vector3(data.px, data.py, data.pz);
                 if (set.Contains("rot"))   go.transform.localEulerAngles = new Vector3(data.rx, data.ry, data.rz);
@@ -333,7 +325,6 @@ namespace MCPBridge
             return $"{{\"saved\":{ok.ToString().ToLower()}}}";
         });
 
-        // หา Type ของ component (รวม non-Component เช่น ScriptableObject ไม่เอา)
         static Type FindComponentTypeAny(string name)
         {
             foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
@@ -350,7 +341,6 @@ namespace MCPBridge
             return null;
         }
 
-        // ── อ่าน Editor.log เต็ม (มี stack trace + ประวัติ Debug.Log) ──────────
         static string ReadLogFile(string body)
         {
             var data = string.IsNullOrEmpty(body) ? new ConsoleRequest() : ParseReq<ConsoleRequest>(body);
@@ -360,11 +350,10 @@ namespace MCPBridge
             {
                 try
                 {
-                    string path = Application.consoleLogPath; // Editor.log ปัจจุบัน
+                    string path = Application.consoleLogPath;
                     if (string.IsNullOrEmpty(path) || !System.IO.File.Exists(path))
                         return "{\"error\":\"log file not found\"}";
 
-                    // อ่านท้ายไฟล์ N บรรทัด (เปิดแบบ shared กัน lock)
                     string[] lines;
                     using (var fs = new System.IO.FileStream(path, System.IO.FileMode.Open, System.IO.FileAccess.Read, System.IO.FileShare.ReadWrite))
                     using (var sr = new System.IO.StreamReader(fs))
@@ -381,14 +370,13 @@ namespace MCPBridge
             });
         }
 
-        // ── Capture runtime state — snapshot ตอนเกมค้าง/ไม่ไปต่อ ──────────────
         static string CaptureState() => ExecuteOnMainThread(() =>
         {
             var sb = new StringBuilder("{");
             sb.Append($"\"isPlaying\":{Application.isPlaying.ToString().ToLower()},");
             sb.Append($"\"isPaused\":{EditorApplication.isPaused.ToString().ToLower()},");
             sb.Append($"\"timeScale\":{Time.timeScale},");
-            sb.Append($"\"frameCount\":{Time.frameCount},");           // เรียก 2 ครั้งเทียบ → รู้ว่าเฟรมเดินมั้ย
+            sb.Append($"\"frameCount\":{Time.frameCount},");
             sb.Append($"\"realtime\":{Time.realtimeSinceStartup:F1},");
             sb.Append($"\"scene\":\"{EscapeJson(UnityEngine.SceneManagement.SceneManager.GetActiveScene().name)}\",");
 
@@ -398,22 +386,17 @@ namespace MCPBridge
             string net = ProfilerDeepReader.NetworkLine();
             sb.Append($"\"network\":\"{EscapeJson(net ?? "n/a")}\",");
 
-            // นับ MonoBehaviour ที่ active (ดูว่ามี manager ทำงานอยู่มั้ย)
             int behaviours = UnityEngine.Object.FindObjectsOfType<MonoBehaviour>().Length;
             sb.Append($"\"activeMonoBehaviours\":{behaviours}");
             sb.Append("}");
 
-            // แนบ spike ที่จับได้ด้วย (ถ้ามี)
             string spikes = SpikeMonitor.GetReport();
             return sb.ToString() + (string.IsNullOrEmpty(spikes) ? "" : "\n" + spikes);
         });
 
-        // ── Performance audit — สำรวจ scene หาตัวการเกมหน่วง + heavy groups ────
-        // worst spike เดียว + โค้ดตัวการ (keyword "worst" / ปุ่ม 🔥)
         static string PerfWorst() => ExecuteOnMainThread(() =>
             $"{{\"report\":\"{EscapeJson(SpikeMonitor.WorstReport())}\"}}");
 
-        // คุม Hot Reload — action: "status" | "start"
         static string HotReload(string body) => ExecuteOnMainThread(() =>
         {
             var data = ParseReq<HotReloadRequest>(body);
@@ -426,26 +409,22 @@ namespace MCPBridge
             return $"{{\"running\":{(HotReloadControl.IsRunning() ? "true" : "false")}}}";
         });
 
-        // สั่ง Unity compile scripts — มี guard ป้องกัน double-compile และ Play Mode
         static string Compile() => ExecuteOnMainThread(() =>
         {
-            // guard 1: ถ้ากำลัง compile อยู่แล้ว → ห้าม trigger ซ้ำ (กัน Reload Domain ซ้อน)
             if (EditorApplication.isCompiling || EditorApplication.isUpdating)
-                return "{\"status\":\"already_compiling\",\"message\":\"Unity กำลัง compile อยู่แล้ว — ให้ poll unity_compile_status จนได้ isCompiling:false แล้วค่อยทำงานต่อ ห้าม compile ซ้ำ\"}";
+                return "{\"status\":\"already_compiling\",\"message\":\"Unity is already compiling. Poll unity_compile_status until isCompiling:false before continuing; do not trigger another compilation.\"}";
 
-            // guard 2: ถ้าอยู่ใน Play Mode → ออกก่อน (compile ใน Play Mode ทำให้ domain reload ค้าง)
             if (EditorApplication.isPlaying || EditorApplication.isPaused)
             {
                 EditorApplication.isPlaying = false;
-                return "{\"status\":\"exiting_play_mode\",\"message\":\"กำลังออก Play Mode ก่อน — รอสักครู่แล้ว call unity_compile อีกครั้ง\"}";
+                return "{\"status\":\"exiting_play_mode\",\"message\":\"Exiting Play Mode first. Wait briefly, then call unity_compile again.\"}";
             }
 
             AssetDatabase.Refresh(ImportAssetOptions.ForceUpdate);
             CompilationPipeline.RequestScriptCompilation(RequestScriptCompilationOptions.None);
-            return "{\"status\":\"compiling\",\"message\":\"compile triggered — ให้ poll unity_compile_status จนได้ isCompiling:false ก่อนทำงานต่อ\"}";
+            return "{\"status\":\"compiling\",\"message\":\"Compilation triggered. Poll unity_compile_status until isCompiling:false before continuing.\"}";
         });
 
-        // เช็คว่า compile เสร็จหรือยัง — Claude poll จนได้ isCompiling:false ก่อนทำงานต่อ
         static string CompileStatus() => ExecuteOnMainThread(() =>
         {
             bool compiling = EditorApplication.isCompiling || EditorApplication.isUpdating;
@@ -454,26 +433,22 @@ namespace MCPBridge
             return $"{{\"isCompiling\":{(compiling ? "true" : "false")},\"isPlaying\":{(playing ? "true" : "false")},\"status\":\"{status}\"}}";
         });
 
-        // AI สั่งปิด MCP server — stop ตรงๆ บน main thread (ExecuteOnMainThread ทำงานได้แม้ editor background)
-        // response ยัง flush ได้ เพราะ worker connection (ตัวที่ตอบ) แยกจาก listener thread ที่ถูกปิด
         static string ServerStop() => ExecuteOnMainThread(() =>
         {
             MCPServer.Stop();
-            return "{\"stopped\":true,\"message\":\"AI สั่งปิด MCP server แล้ว (ping ครั้งถัดไปจะ fail = ปิดสำเร็จ)\"}";
+            return "{\"stopped\":true,\"message\":\"AI Unity MCP Server stop requested. A failed subsequent ping confirms that the server stopped.\"}";
         });
 
         static string PerfAudit() => ExecuteOnMainThread(() =>
         {
             var sb = new StringBuilder("{");
 
-            // 1) frame stats (ถ้าเล่นอยู่)
             if (ProfilerReader.IsLive)
             {
                 float fps = ProfilerReader.CurrentFps();
                 sb.Append($"\"fps\":{fps:F0},");
             }
 
-            // 2) census — นับของหนักในซีน (เฉพาะ active)
             int renderers = 0, skinned = 0, particles = 0, rtLights = 0, animators = 0,
                 audio = 0, rigidbodies = 0, meshColliders = 0, canvases = 0, trails = 0;
 
@@ -523,7 +498,6 @@ namespace MCPBridge
                       $"\"transparentRenderers\":{transparentRenderers},\"shadowCasters\":{shadowCasters}," +
                       $"\"activeCameras\":{activeCameras},\"rtReflProbes\":{rtReflProbes},\"lodGroups\":{lodGroups}}},");
 
-            // 3) heavy groups — จัดกลุ่ม object ตามชื่อ (ตัด (Clone)/เลขท้าย) → เจอ "ต้นไม้ x500"
             var groups = new Dictionary<string, int>();
             foreach (var go in UnityEngine.Object.FindObjectsOfType<GameObject>())
             {
@@ -540,7 +514,6 @@ namespace MCPBridge
             }
             sb.Append("],");
 
-            // 4) GPU instancing candidates — material ที่ใช้กับ 20+ renderer แต่ยังไม่ได้เปิด instancing
             var matUsage = new Dictionary<Material, int>();
             foreach (var r in UnityEngine.Object.FindObjectsOfType<Renderer>())
                 foreach (var mat in r.sharedMaterials)
@@ -568,7 +541,6 @@ namespace MCPBridge
             }
             sb.Append($"\"shaderComplexity\":{{\"multiPassShaders\":{multiPassMats},\"grabPassShaders\":{grabPassMats}}},");
 
-            // 6) physics layer matrix — กี่ pair ที่ยัง collide กันอยู่
             var usedLayers = new List<int>();
             for (int i = 0; i < 32; i++)
                 if (!string.IsNullOrEmpty(LayerMask.LayerToName(i))) usedLayers.Add(i);
@@ -596,38 +568,37 @@ namespace MCPBridge
             string net = ProfilerDeepReader.NetworkLine();
             sb.Append($"\"network\":\"{EscapeJson(net ?? "n/a")}\",");
 
-            // 5) heuristic warnings (ตัวการที่พบบ่อย)
             var warn = new List<string>();
-            if (rtLights > 8)       warn.Add($"Realtime lights {rtLights} ตัว — แพง! bake แสงที่ไม่เคลื่อนไหว / ลดจำนวน");
-            if (skinned > 60)       warn.Add($"SkinnedMesh {skinned} ตัว (ครีป/ตัวละครเยอะ) — ใช้ LOD + culling, ลด bone, GPU skinning");
-            if (particles > 40)     warn.Add($"ParticleSystem {particles} ตัว — pool + ลด max particles + culling");
-            if (meshColliders > 15) warn.Add($"Non-convex MeshCollider {meshColliders} — แพงตอนชน ใช้ primitive collider แทน");
-            if (canvases > 10)      warn.Add($"Canvas {canvases} ตัว — แยก dynamic/static canvas กัน rebuild ทั้งจอ");
-            if (animators > 80)            warn.Add($"Animator {animators} ตัว — ปิด animator ที่อยู่นอกจอ (culling mode) / ใช้ GPU animation");
-            if (transparentRenderers > 50) warn.Add($"Transparent renderers {transparentRenderers} ตัว — Transparent ไม่ batch เกิด overdraw → จำกัดจำนวน หรือแทนด้วย opaque + alpha cutout");
-            if (shadowCasters > 300)       warn.Add($"Shadow casters {shadowCasters} ตัว — ทุกตัวต้องวาด shadow map → ลด Shadow Distance หรือปิด Cast Shadows บน object ที่ห่างจากกล้อง");
+            if (rtLights > 8)       warn.Add($"{rtLights} realtime lights are expensive. Bake stationary lighting or reduce the count.");
+            if (skinned > 60)       warn.Add($"{skinned} SkinnedMesh renderers. Use LOD and culling, reduce bone counts, and consider GPU skinning.");
+            if (particles > 40)     warn.Add($"{particles} ParticleSystems. Pool them, reduce maximum particles, and enable culling.");
+            if (meshColliders > 15) warn.Add($"{meshColliders} non-convex MeshColliders are expensive during collision. Prefer primitive colliders.");
+            if (canvases > 10)      warn.Add($"{canvases} Canvases. Split dynamic and static content to avoid full-screen rebuilds.");
+            if (animators > 80)            warn.Add($"{animators} Animators. Cull off-screen animators or use GPU animation.");
+            if (transparentRenderers > 50) warn.Add($"{transparentRenderers} transparent renderers cannot batch effectively and cause overdraw. Reduce them or use opaque alpha-cutout materials.");
+            if (shadowCasters > 300)       warn.Add($"{shadowCasters} shadow casters require shadow-map draws. Reduce Shadow Distance or disable Cast Shadows on distant objects.");
             if (instanceCandidates.Count > 0)
-                warn.Add($"GPU Instancing ปิดอยู่บน {instanceCandidates.Count} material ที่ใช้ 20+ renderer — เปิด Enable GPU Instancing ใน material inspector ลด draw calls ได้มาก");
+                warn.Add($"GPU Instancing is disabled on {instanceCandidates.Count} materials used by at least 20 renderers. Enable it in the material inspector to reduce draw calls.");
             if (multiPassMats > 0)
-                warn.Add($"Multi-pass shaders {multiPassMats} ตัว — แต่ละ pass = render scene ซ้ำ → ใช้ URP single-pass shader แทน");
+                warn.Add($"{multiPassMats} multi-pass shaders render the scene more than once. Prefer URP single-pass shaders.");
             if (grabPassMats > 0)
-                warn.Add($"GrabPass shaders {grabPassMats} ตัว — copy framebuffer ทุกครั้งที่ render = แพงมาก → ใช้ Camera Opaque Texture ใน URP Pipeline Asset แทน");
+                warn.Add($"{grabPassMats} GrabPass shaders copy the framebuffer and are very expensive. Use Camera Opaque Texture in the URP Pipeline Asset.");
             if (activeCameras > 1)
-                warn.Add($"Active cameras {activeCameras} ตัว — แต่ละตัว = full render pass → ปิดกล้องที่ไม่ใช้ หรือรวมใช้ Camera Stacking");
+                warn.Add($"{activeCameras} active cameras each add a full render pass. Disable unused cameras or combine them with Camera Stacking.");
             if (rtReflProbes > 0)
-                warn.Add($"Realtime Reflection Probes {rtReflProbes} ตัว — แพงมาก! เปลี่ยนเป็น Baked หรือ Custom Cubemap");
+                warn.Add($"{rtReflProbes} realtime Reflection Probes are very expensive. Use Baked mode or a Custom Cubemap.");
             if (pointLights > 4)
-                warn.Add($"Point Lights {pointLights} ตัว — shadow = cube map 6 faces ต่อดวง แพงมาก → bake หรือใช้ Light Probe แทน");
+                warn.Add($"{pointLights} Point Lights. Each shadowed light renders six cubemap faces; bake lighting or use Light Probes.");
             if (spotLights > 6)
-                warn.Add($"Spot Lights {spotLights} ตัว — bake หรือใช้ cookie texture แทน realtime shadow");
+                warn.Add($"{spotLights} Spot Lights. Bake them or use cookie textures instead of realtime shadows.");
             if (skinned > 20 && lodGroups < skinned / 3)
-                warn.Add($"SkinnedMesh {skinned} ตัว แต่ LODGroup มีแค่ {lodGroups} — ควรมี LOD สำหรับ character/creep เพื่อลด bone/polygon เมื่อห่างจากกล้อง");
+                warn.Add($"{skinned} SkinnedMesh renderers but only {lodGroups} LODGroups. Add character LODs to reduce distant bone and polygon cost.");
             if (usedLayers.Count > 4 && activePairs > maxPairs * 0.7f)
-                warn.Add($"Physics layer matrix: {activePairs}/{maxPairs} pairs ยัง collide — ตรวจ Project Settings → Physics ปิด pair ที่ไม่จำเป็น");
+                warn.Add($"Physics layer matrix: {activePairs}/{maxPairs} pairs still collide. Disable unnecessary pairs in Project Settings → Physics.");
             if (staticMiss > 50)
-                warn.Add($"~{staticMiss} MeshRenderer อาจ static ได้แต่ยังไม่ mark — Mark Static → static batching + occlusion culling ทำงานได้");
+                warn.Add($"Approximately {staticMiss} MeshRenderers may be static but are not marked. Mark them Static to enable static batching and occlusion culling.");
             foreach (var g in top)
-                if (g.Value >= 200) warn.Add($"'{g.Key}' มี {g.Value} ตัว — เยอะมาก! pooling + culling + LOD + GPU instancing");
+                if (g.Value >= 200) warn.Add($"'{g.Key}' has {g.Value} instances. Apply pooling, culling, LOD and GPU instancing.");
 
             sb.Append("\"warnings\":[");
             for (int i = 0; i < warn.Count; i++)
@@ -637,12 +608,10 @@ namespace MCPBridge
             }
             sb.Append("]}");
 
-            // แนบ frame report (CPU/GPU bound, 0.1% low) + spike + network monitor — Snapshot รวมให้แล้ว
             string frame = ProfilerReader.IsLive ? ProfilerReader.Snapshot() : (SpikeMonitor.GetReport() ?? "");
             return sb.ToString() + "\n" + frame;
         });
 
-        // ตัด "(Clone)" และเลข/ช่องว่างท้ายชื่อ → จัดกลุ่ม object ชนิดเดียวกัน
         static string NormalizeName(string name)
         {
             name = name.Replace("(Clone)", "");
@@ -650,7 +619,6 @@ namespace MCPBridge
             return name.Trim();
         }
 
-        // ── Clear console (ใช้ก่อน reproduce เพื่อ isolate error ใหม่) ─────────
         static string ClearConsole() => ExecuteOnMainThread(() =>
         {
             try
@@ -662,7 +630,6 @@ namespace MCPBridge
             catch (Exception e) { return $"{{\"error\":\"{EscapeJson(e.Message)}\"}}"; }
         });
 
-        // ── Play control — ให้ AI reproduce bug ได้ (enter/exit/pause/step) ───
         static string PlayControl(string body)
         {
             var data = ParseReq<PlayRequest>(body);
@@ -675,7 +642,6 @@ namespace MCPBridge
                     case "pause": EditorApplication.isPaused = true;   return "{\"play\":\"paused\"}";
                     case "resume":EditorApplication.isPaused = false;  return "{\"play\":\"resumed\"}";
                     case "step":  EditorApplication.Step();            return "{\"play\":\"stepped\"}";
-                    // slow-mo/เร่ง — ดูเหตุการณ์เร็วๆ (hit/knockback/spawn) แบบสโลว์ขณะ Watcher เก็บค่าไปด้วย
                     case "timescale": case "slowmo":
                         float sc = data.scale > 0 ? Mathf.Clamp(data.scale, 0.01f, 100f) : 0.2f;
                         Time.timeScale = sc;
@@ -685,8 +651,6 @@ namespace MCPBridge
             });
         }
 
-        // ── อ่าน source ของ script (มีเลขบรรทัด) เพื่อให้ AI ชี้บรรทัดได้ ───────
-        // รองรับ filter เฉพาะเมธอด (เช่น "Update") เพื่อตัด output ให้สั้น + ตรงจุด
         static string ReadScript(string body)
         {
             var data = ParseReq<ReadScriptRequest>(body);
@@ -708,7 +672,6 @@ namespace MCPBridge
                     string line = lines[i];
                     if (filter)
                     {
-                        // เริ่ม emit เมื่อเจอชื่อเมธอด แล้ว emit จนจบ block { }
                         if (!inMethod && line.Contains(data.method) && (line.Contains("(")))
                         {
                             inMethod = true; braceDepth = 0;
@@ -774,7 +737,7 @@ namespace MCPBridge
             try
             {
                 if (!Application.isPlaying)
-                    return "{\"error\":\"ต้องกด Play ก่อน — Fusion runner ทำงานตอน runtime เท่านั้น\"}";
+                    return "{\"error\":\"Enter Play Mode first; the Fusion runner exists only at runtime.\"}";
 
                 Type runnerType = null;
                 foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
@@ -783,11 +746,11 @@ namespace MCPBridge
                     if (runnerType != null) break;
                 }
                 if (runnerType == null)
-                    return "{\"error\":\"Fusion.NetworkRunner not found — ตรวจว่า Photon Fusion 2 ติดตั้งแล้ว\"}";
+                    return "{\"error\":\"Fusion.NetworkRunner type not found. Verify that Photon Fusion 2 is installed.\"}";
 
                 var runner = UnityEngine.Object.FindObjectOfType(runnerType);
                 if (runner == null)
-                    return "{\"error\":\"NetworkRunner ไม่มีใน scene\"}";
+                    return "{\"error\":\"No NetworkRunner exists in the scene.\"}";
 
                 object Get(string prop) => runnerType.GetProperty(prop)?.GetValue(runner);
 
@@ -851,11 +814,9 @@ namespace MCPBridge
                         AppNum("packetLoss",   "PacketLoss");
                         AppNum("resendRate",   "ResendRate");
 
-                        // Resimulation count (ถ้ามี)
                         var resimCount = Val("ResimulationCount") ?? Val("Resimulations");
                         if (resimCount != null) sb.Append($"\"resimCount\":{resimCount},");
 
-                        // Snapshot delta size (ถ้ามี)
                         var snapSize = Val("SnapshotSize") ?? Val("StateDeltaSize");
                         if (snapSize != null) sb.Append($"\"snapshotDeltaBytes\":{snapSize},");
                     }

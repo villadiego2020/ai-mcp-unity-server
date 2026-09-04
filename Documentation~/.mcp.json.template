@@ -1,6 +1,6 @@
 {
   "mcpServers": {
-    "unity": {
+    "AIUnityMCPServer": {
       "command": "node",
       "args": ["./Packages/com.mcpbridge/Server~/index.js"]
     }

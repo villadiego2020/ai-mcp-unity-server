@@ -4,194 +4,375 @@ import { z } from "zod";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import { instanceDirs, listInstances, pickInstancePort, preferredProjectRoot } from "./registry.js";
+import {
+  instanceDirs,
+  isReachableInstance,
+  listInstances,
+  preferredProjectRoot,
+  resolveInstance,
+} from "./registry.js";
 
-const TIMEOUT_MS  = 8000;   // timeout ต่อ request
-const MAX_RETRIES = 3;       // retry สูงสุด
-const RETRY_DELAY = 600;     // ms ระหว่าง retry
+const TIMEOUT_MS = 8000;
+const MAX_RETRIES = 8;
+const RETRY_DELAY_MS = 500;
+const MAX_RETRY_DELAY_MS = 2000;
+const DEFAULT_CONNECT_TIMEOUT_SECONDS = 10;
+const COMMANDS_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), "commands.json");
 
-let selectedPort = null;   // target ที่เลือกไว้ (per-session ของ bridge นี้)
+let selectedTarget = null;
 
-// เลือก port เป้าหมาย — UNITY_MCP_PORT (ตั้งเอง) ชนะทุกอย่าง ที่เหลือดู registry.js
-function resolvePort() {
-  if (process.env.UNITY_MCP_PORT) return Number(process.env.UNITY_MCP_PORT);
-  return pickInstancePort(listInstances(), selectedPort);
+const sleep = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
+
+function fixedPort() {
+  if (!process.env.UNITY_MCP_PORT) return null;
+  const port = Number(process.env.UNITY_MCP_PORT);
+  return Number.isInteger(port) && port > 0 && port <= 65535 ? port : Number.NaN;
 }
 
-// ── Helper: sleep ─────────────────────────────────────────────────────────
-const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+function targetIdentity(instance) {
+  return {
+    instanceId: instance.instanceId || "",
+    pid: instance.pid || 0,
+    port: instance.port || 0,
+    label: instance.label || "",
+    projectPath: instance.projectPath || "",
+  };
+}
 
-// ── Helper: call Unity Editor (resolve target port + retry + timeout) ──────
-// opts.timeoutMs / opts.maxRetries override the defaults per command (set in commands.json) —
-// long jobs (e.g. run_csharp compiling via Roslyn) need a longer timeout AND maxRetries:1, because
-// retrying a non-idempotent command would re-run its side effects.
-async function callUnity(path_, body = {}, opts = {}) {
-  const timeoutMs  = opts.timeoutMs  ?? TIMEOUT_MS;
-  const maxRetries = opts.maxRetries ?? MAX_RETRIES;
-  const port = resolvePort();
-  if (port == null)
-    return { error: "ไม่พบ Unity instance ที่เปิด MCP server — เปิด Unity แล้วกด MCP Bridge → Server → Start (ดูรายการด้วย unity_list_instances)" };
-  const base = `http://localhost:${port}`;
+function resolveTarget(options = {}) {
+  const configuredPort = fixedPort();
+  if (Number.isNaN(configuredPort)) {
+    return {
+      error: {
+        code: "INVALID_CONFIG",
+        error: `UNITY_MCP_PORT must be an integer from 1 to 65535, got '${process.env.UNITY_MCP_PORT}'.`,
+        action: "Fix or remove UNITY_MCP_PORT, then restart the MCP client session.",
+      },
+    };
+  }
 
-  let lastErr;
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+  const instances = listInstances();
+  if (configuredPort) {
+    const registered = instances.find(instance => instance.port === configuredPort);
+    return {
+      instance: registered || {
+        instanceId: `fixed-port-${configuredPort}`,
+        label: "Fixed port",
+        project: "",
+        projectPath: "",
+        pid: 0,
+        port: configuredPort,
+        serverOn: true,
+        stale: false,
+      },
+      source: "UNITY_MCP_PORT",
+    };
+  }
+
+  return resolveInstance(instances, {
+    target: options.target,
+    selected: selectedTarget,
+    preferredRoot: preferredProjectRoot(),
+    requireServerOn: !!options.requireServerOn,
+  });
+}
+
+async function fetchUnity(instance, request) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), request.timeoutMs);
+  try {
+    const response = await fetch(`http://127.0.0.1:${instance.port}${request.path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(request.body),
+      signal: controller.signal,
+    });
+    const text = await response.text();
     try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), timeoutMs);
-      const res = await fetch(`${base}${path_}`, {
-        method:  "POST",
-        headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify(body),
-        signal:  controller.signal,
-      });
-      clearTimeout(timer);
-      const text = await res.text();
-      try { return JSON.parse(text); }
-      catch { return { raw: text }; }
-    } catch (err) {
-      lastErr = err;
-      const isTimeout = err.name === "AbortError";
-      const reason    = isTimeout ? "timeout" : "connection refused";
-      if (attempt < maxRetries) {
-        const delay = RETRY_DELAY * attempt;   // backoff: 600, 1200 ms
-        console.error(`[MCP] ${reason} (port ${port}) → retry ${attempt}/${MAX_RETRIES - 1} in ${delay}ms`);
-        await sleep(delay);
+      return JSON.parse(text);
+    } catch {
+      return { raw: text, httpStatus: response.status };
+    }
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function callUnity(requestPath, body = {}, options = {}) {
+  const timeoutMs = options.timeoutMs ?? TIMEOUT_MS;
+  const maxRetries = options.maxRetries ?? MAX_RETRIES;
+  let lastFailure = null;
+  let lastInstance = null;
+
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    const resolved = resolveTarget({ requireServerOn: true });
+    if (resolved.error) {
+      if (["AMBIGUOUS", "INVALID_CONFIG"].includes(resolved.error.code)) return resolved.error;
+      lastFailure = resolved.error;
+    } else {
+      lastInstance = resolved.instance;
+      try {
+        return await fetchUnity(resolved.instance, { path: requestPath, body, timeoutMs });
+      } catch (error) {
+        lastFailure = {
+          code: error.name === "AbortError" ? "TIMEOUT" : "CONNECTION_FAILED",
+          error: error.message,
+        };
       }
     }
+
+    if (attempt < maxRetries) {
+      const delay = Math.min(RETRY_DELAY_MS * attempt, MAX_RETRY_DELAY_MS);
+      console.error(`[AI Unity MCP Server] ${lastFailure?.code || "connection failed"} → re-discover ${attempt}/${maxRetries - 1} in ${delay}ms`);
+      await sleep(delay);
+    }
   }
-  // หมด retry แล้วยังไม่ได้ → ส่ง error กลับแทน throw (กัน Claude ค้าง)
-  return { error: `Unity MCP Server (port ${port}) ไม่ตอบสนอง (${lastErr?.name ?? "unknown"}) — กด MCP Bridge → Server → Start ใน Unity` };
+
+  return {
+    code: lastFailure?.code || "CONNECTION_FAILED",
+    error: lastFailure?.error || "AI Unity MCP Server did not respond.",
+    action: "Call unity_connection_status, then unity_connect. Pass an exact target if status is AMBIGUOUS.",
+    lastTarget: lastInstance ? publicInstance(lastInstance) : undefined,
+  };
 }
 
-// ── Command manifest : SINGLE SOURCE (อ่านร่วมกับ Unity C# MCPHandlers.cs) ──
-//    เพิ่ม/แก้ tool ที่ commands.json ที่เดียว → bridge (ไฟล์นี้) + แชตใน Unity เห็นพร้อมกัน
-const COMMANDS_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), "commands.json");
 function loadCommands() {
   try {
-    let txt = fs.readFileSync(COMMANDS_PATH, "utf8");
-    if (txt.charCodeAt(0) === 0xFEFF) txt = txt.slice(1);
-    return JSON.parse(txt).commands || [];
-  } catch (e) {
-    console.error(`[MCP] โหลด commands.json ไม่ได้: ${e.message}`);
+    let text = fs.readFileSync(COMMANDS_PATH, "utf8");
+    if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
+    return JSON.parse(text).commands || [];
+  } catch (error) {
+    console.error(`[AI Unity MCP Server] Could not load commands.json: ${error.message}`);
     return [];
   }
 }
-// แปลง param spec (plain JSON) → Zod raw shape ที่ server.tool ต้องการ
-function toZodShape(params) {
+
+function toZodShape(parameters) {
   const shape = {};
-  for (const [key, p] of Object.entries(params || {})) {
-    let zt;
-    switch (p.type) {
-      case "number":   zt = z.number(); break;
-      case "boolean":  zt = z.boolean(); break;
-      case "enum":     zt = z.enum(p.values); break;
-      case "number[]": zt = z.array(z.number()); break;
-      case "object[]": zt = z.array(z.record(z.any())); break;   // batch sub-commands
-      default:         zt = z.string();
+  for (const [key, parameter] of Object.entries(parameters || {})) {
+    let schema;
+    switch (parameter.type) {
+      case "number": schema = z.number(); break;
+      case "boolean": schema = z.boolean(); break;
+      case "enum": schema = z.enum(parameter.values); break;
+      case "number[]": schema = z.array(z.number()); break;
+      case "object[]": schema = z.array(z.record(z.any())); break;
+      default: schema = z.string();
     }
-    if (p.desc) zt = zt.describe(p.desc);
-    if (Object.prototype.hasOwnProperty.call(p, "default")) zt = zt.optional().default(p.default);
-    else if (p.opt) zt = zt.optional();
-    shape[key] = zt;
+    if (parameter.desc) schema = schema.describe(parameter.desc);
+    if (Object.prototype.hasOwnProperty.call(parameter, "default")) schema = schema.optional().default(parameter.default);
+    else if (parameter.opt) schema = schema.optional();
+    shape[key] = schema;
   }
   return shape;
 }
 
-// ── MCP Server ────────────────────────────────────────────────────────────
-const server = new McpServer({
-  name: "unity-mcp",
-  version: "1.0.0",
-});
-
-// ── Instance-management tools (local registry logic — ไม่อยู่ใน manifest) ────
-
-server.tool("unity_list_instances", "List ALL open Unity Editor instances (ParrelSync Main/Clone for multiplayer host/client testing), including ones with the MCP server OFF. Returns label, project, serverOn, and which is active. Use before open/close/switch to let the user pick an editor.", {}, async () => {
-  const inst = listInstances();
-  const active = resolvePort();
-  const out = inst
-    .sort((a, b) => a.port - b.port)
-    .map(i => ({ label: i.label, project: i.project, projectPath: i.projectPath, port: i.port, serverOn: !!i.serverOn, active: !!i.serverOn && i.port === active }));
-  if (out.length) return { content: [{ type: "text", text: JSON.stringify(out, null, 2) }] };
-  const searched = instanceDirs().map(d => ({ dir: d, exists: fs.existsSync(d) }));
-  return { content: [{ type: "text", text: JSON.stringify({
-    instances: [],
-    note: "ไม่มี Unity editor ที่ติดตั้ง MCP Bridge เปิดอยู่ (editor เขียน presence ตอนโหลด package)",
-    _debug: { searched, preferredProject: preferredProjectRoot(), cwd: process.cwd() },
-  }, null, 2) }] };
-});
-
-// helper: หา instance จาก label/pid/port
-function findInstance(target) {
-  const inst = listInstances();
-  const t = String(target).toLowerCase();
-  return inst.find(i => String(i.pid) === t || String(i.port) === t || String(i.label || "").toLowerCase() === t);
+function publicInstance(instance) {
+  return {
+    schemaVersion: instance.schemaVersion,
+    instanceId: instance.instanceId || undefined,
+    label: instance.label,
+    project: instance.project,
+    projectPath: instance.projectPath,
+    pid: instance.pid,
+    port: instance.port,
+    serverOn: !!instance.serverOn,
+    stale: !!instance.stale,
+    heartbeatAgeMs: Number.isFinite(instance.heartbeatAgeMs) ? Math.round(instance.heartbeatAgeMs) : undefined,
+    packageVersion: instance.packageVersion,
+  };
 }
 
-server.tool("unity_select_instance", "Select which Unity Editor (with server ON) subsequent unity_* commands target. Pass label ('Main','Clone 0') or port. Per-session — other sessions can target a different editor. If the target's server is OFF, use unity_start_instance first.", {
-  target: z.string().describe("Instance label (e.g. 'Main', 'Clone 0') or port"),
-}, async ({ target }) => {
-  const pick = findInstance(target);
-  if (!pick)
-    return { content: [{ type: "text", text: JSON.stringify({ error: `ไม่พบ instance '${target}'`, available: listInstances().map(i => `${i.label}${i.serverOn ? "" : " (off)"}`) }) }] };
-  if (!pick.serverOn)
-    return { content: [{ type: "text", text: JSON.stringify({ error: `'${pick.label}' server ปิดอยู่ — ใช้ unity_start_instance ก่อน`, label: pick.label }) }] };
-  selectedPort = pick.port;
-  return { content: [{ type: "text", text: JSON.stringify({ selected: pick.label, port: pick.port, project: pick.project }) }] };
-});
+function textResult(value) {
+  return { content: [{ type: "text", text: JSON.stringify(value, null, 2) }] };
+}
 
-server.tool("unity_start_instance", "Start (activate) the MCP server on a specific Unity Editor that is open but server OFF — writes a trigger its watcher picks up (AI-driven Start). Pass label ('Main','Clone 0') or pid. After it comes online it becomes the selected target. Use when unity_list_instances shows serverOn:false.", {
-  target: z.string().describe("Instance label (e.g. 'Main', 'Clone 0') or pid"),
-}, async ({ target }) => {
-  const pick = findInstance(target);
-  if (!pick)
-    return { content: [{ type: "text", text: JSON.stringify({ error: `ไม่พบ instance '${target}'`, available: listInstances().map(i => i.label) }) }] };
-  if (pick.serverOn) { selectedPort = pick.port; return { content: [{ type: "text", text: JSON.stringify({ alreadyOn: pick.label, port: pick.port }) }] }; }
-  if (!pick.projectPath)
-    return { content: [{ type: "text", text: JSON.stringify({ error: `ไม่รู้ projectPath ของ '${pick.label}' — สั่ง start ไม่ได้` }) }] };
-  // เขียน trigger ลง Library ของ editor นั้น → watcher ของมันจะ Start ให้
+async function probe(instance, timeoutMs = 1200) {
   try {
-    const dir = path.join(pick.projectPath, "Library", "DeltaMCP");
-    fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(dir, "request-start"), "1");
-  } catch (e) {
-    return { content: [{ type: "text", text: JSON.stringify({ error: `เขียน trigger ไม่สำเร็จ: ${e.message}` }) }] };
+    const response = await fetchUnity(instance, { path: "/ping", body: {}, timeoutMs });
+    return { reachable: !response?.error, response };
+  } catch (error) {
+    return {
+      reachable: false,
+      error: error.name === "AbortError" ? "probe timed out" : error.message,
+    };
   }
-  // รอ watcher (1.5s) แล้ว poll presence ว่า serverOn ขึ้นไหม (สูงสุด ~7s)
-  for (let i = 0; i < 9; i++) {
-    await sleep(800);
-    const e = findInstance(pick.pid);
-    if (e && e.serverOn) { selectedPort = e.port; return { content: [{ type: "text", text: JSON.stringify({ started: e.label, port: e.port, project: e.project }) }] }; }
-  }
-  return { content: [{ type: "text", text: JSON.stringify({ error: `สั่ง start '${pick.label}' แล้วแต่ยังไม่ออนไลน์ — watcher อาจยังไม่ทำงาน (clone ยัง compile โค้ดใหม่ไม่เสร็จ?) ลองใหม่ หรือกด Start ที่ editor นั้นเอง` }) }] };
-});
+}
 
-// ── Unity tools — register จาก manifest (single source) ทุกตัวยิง callUnity(path) ──
-const _cmds = loadCommands();
-for (const cmd of _cmds) {
-  // per-command overrides (commands.json): timeoutMs for slow jobs, noRetry for non-idempotent ones.
-  const opts = { timeoutMs: cmd.timeoutMs, maxRetries: cmd.noRetry ? 1 : undefined };
-  const isScreenshot = cmd.command === "capture_screenshot";
-  server.tool(cmd.tool, cmd.description, toZodShape(cmd.params), async (args) => {
-    const r = await callUnity(cmd.path, args || {}, opts);
-    // capture_screenshot: read the PNG off disk (bridge runs on the same machine as Unity) and
-    // return it as an actual image block so Claude can SEE the result — not just a file path.
-    if (isScreenshot && r && r.screenshot && !r.error) {
-      try {
-        const png = fs.readFileSync(r.screenshot);
-        const meta = { screenshot: r.screenshot, view: r.view, mode: r.mode, size: r.size, bytes: r.bytes };
-        return { content: [
-          { type: "text", text: JSON.stringify(meta, null, 2) },
-          { type: "image", data: png.toString("base64"), mimeType: "image/png" },
-        ] };
-      } catch (e) {
-        return { content: [{ type: "text", text: JSON.stringify({ ...r, _imageReadError: e.message }, null, 2) }] };
+function writeStartRequest(instance) {
+  if (!instance.projectPath) {
+    return {
+      code: "NO_PROJECT_PATH",
+      error: `Unity Editor '${instance.label}' has no projectPath, so it cannot be started remotely.`,
+      action: "Start the server from AI Unity MCP Server → Server → Start in that Editor.",
+    };
+  }
+
+  try {
+    const directory = path.join(instance.projectPath, "Library", "AIUnityMCPServer");
+    fs.mkdirSync(directory, { recursive: true });
+    fs.writeFileSync(path.join(directory, "request-start"), JSON.stringify({
+      instanceId: instance.instanceId || "",
+      requestedAtUnixMs: Date.now(),
+      readOnly: true,
+    }));
+    return null;
+  } catch (error) {
+    return {
+      code: "START_REQUEST_FAILED",
+      error: `Could not request start for '${instance.label}': ${error.message}`,
+      action: "Start the server from AI Unity MCP Server → Server → Start in that Editor.",
+    };
+  }
+}
+
+async function connectToUnity(target, timeoutSeconds) {
+  const initial = resolveTarget({ target, requireServerOn: false });
+  if (initial.error) return initial.error;
+
+  selectedTarget = targetIdentity(initial.instance);
+  let startRequested = false;
+  const deadline = Date.now() + timeoutSeconds * 1000;
+  let lastProbe = null;
+
+  while (Date.now() <= deadline) {
+    const current = resolveTarget({ requireServerOn: false });
+    if (current.error) {
+      if (["AMBIGUOUS", "INVALID_CONFIG"].includes(current.error.code)) return current.error;
+    } else {
+      selectedTarget = targetIdentity(current.instance);
+      if (isReachableInstance(current.instance) || fixedPort()) {
+        lastProbe = await probe(current.instance);
+        if (lastProbe.reachable) {
+          return {
+            status: "connected",
+            target: publicInstance(current.instance),
+            source: current.source,
+            writeGate: startRequested
+              ? "OFF after remote start; enable it explicitly in Unity only when mutation is intended."
+              : "Unchanged because the server was already online; inspect Unity before running mutation tools.",
+          };
+        }
+      }
+
+      if (!startRequested && !fixedPort() && !isReachableInstance(current.instance)) {
+        const startError = writeStartRequest(current.instance);
+        if (startError) return startError;
+        startRequested = true;
       }
     }
-    return { content: [{ type: "text", text: JSON.stringify(r, null, 2) }] };
+
+    await sleep(400);
+  }
+
+  return {
+    code: "CONNECT_TIMEOUT",
+    error: `Unity did not become reachable within ${timeoutSeconds} seconds.`,
+    action: "Wait for Unity compilation to finish, call unity_connection_status, then retry unity_connect.",
+    target: selectedTarget,
+    lastProbe,
+  };
+}
+
+const server = new McpServer({
+  name: "AIUnityMCPServer",
+  version: "1.0.0",
+}, {
+  instructions: "Use unity_connection_status when connection state is unknown. Use unity_connect for one-call discovery, read-only start, selection, and health verification. If a result has code AMBIGUOUS, never guess: show the candidates and ask for an instanceId, pid, port, or full projectPath. Remote and automatic starts keep Allow Write Commands OFF; only the user should enable writes in Unity.",
+});
+
+server.tool("unity_list_instances", "List all discoverable Unity Editors, including AI Unity MCP Server state, stable instanceId, heartbeat freshness, project path, and the active target for this MCP session.", {}, async () => {
+  const instances = listInstances();
+  const active = resolveTarget({ requireServerOn: false });
+  const activeIdentity = active.instance ? targetIdentity(active.instance) : null;
+  const output = instances.map(instance => ({
+    ...publicInstance(instance),
+    active: !!activeIdentity && (
+      (activeIdentity.instanceId && instance.instanceId === activeIdentity.instanceId)
+      || (!activeIdentity.instanceId && instance.pid === activeIdentity.pid)
+    ),
+  }));
+  if (output.length) return textResult(output);
+  return textResult({
+    instances: [],
+    note: "No Unity Editor with AI Unity MCP Server is discoverable.",
+    action: "Open Unity and wait for package compilation to finish.",
+    debug: { searched: instanceDirs(), preferredProject: preferredProjectRoot(), cwd: process.cwd() },
+  });
+});
+
+server.tool("unity_connection_status", "Diagnose Unity MCP discovery and connectivity without changing config or starting an Editor. Returns a structured error code and next action when offline or ambiguous.", {}, async () => {
+  const instances = listInstances();
+  const resolved = resolveTarget({ requireServerOn: false });
+  if (resolved.error) {
+    return textResult({
+      status: resolved.error.code === "AMBIGUOUS" ? "ambiguous" : "offline",
+      ...resolved.error,
+      preferredProject: preferredProjectRoot(),
+      discoveredCount: instances.length,
+    });
+  }
+
+  const health = (isReachableInstance(resolved.instance) || fixedPort())
+    ? await probe(resolved.instance)
+    : { reachable: false, error: "presence reports server OFF or heartbeat stale" };
+  return textResult({
+    status: health.reachable ? "connected" : "offline",
+    target: publicInstance(resolved.instance),
+    source: resolved.source,
+    preferredProject: preferredProjectRoot(),
+    discoveredCount: instances.length,
+    probe: health,
+    action: health.reachable ? "Ready." : "Call unity_connect. Pass an exact target if more than one project is open.",
+  });
+});
+
+server.tool("unity_connect", "One-call Unity MCP connection: deterministically discovers the target, starts its server read-only when needed, follows port changes, and verifies ping. Returns AMBIGUOUS instead of silently choosing across projects.", {
+  target: z.string().optional().describe("Optional exact instanceId, pid, port, label, project name, or full projectPath"),
+  timeoutSeconds: z.number().min(1).max(30).optional().default(DEFAULT_CONNECT_TIMEOUT_SECONDS),
+}, async ({ target, timeoutSeconds }) => textResult(await connectToUnity(target, timeoutSeconds)));
+
+server.tool("unity_select_instance", "Select which already-online Unity Editor subsequent unity_* commands target. Kept for backward compatibility; prefer unity_connect.", {
+  target: z.string().describe("Exact instanceId, pid, port, label, project name, or full projectPath"),
+}, async ({ target }) => {
+  const resolved = resolveTarget({ target, requireServerOn: true });
+  if (resolved.error) return textResult(resolved.error);
+  selectedTarget = targetIdentity(resolved.instance);
+  return textResult({ selected: publicInstance(resolved.instance), source: resolved.source });
+});
+
+server.tool("unity_start_instance", "Start and select a Unity Editor read-only. Kept for backward compatibility; equivalent to unity_connect with a target.", {
+  target: z.string().describe("Exact instanceId, pid, port, label, project name, or full projectPath"),
+}, async ({ target }) => textResult(await connectToUnity(target, DEFAULT_CONNECT_TIMEOUT_SECONDS)));
+
+const commands = loadCommands();
+for (const command of commands) {
+  const options = { timeoutMs: command.timeoutMs, maxRetries: command.noRetry ? 1 : undefined };
+  const isScreenshot = command.command === "capture_screenshot";
+  server.tool(command.tool, command.description, toZodShape(command.params), async args => {
+    const response = await callUnity(command.path, args || {}, options);
+    if (isScreenshot && response?.screenshot && !response.error) {
+      try {
+        const png = fs.readFileSync(response.screenshot);
+        const metadata = {
+          screenshot: response.screenshot,
+          view: response.view,
+          mode: response.mode,
+          size: response.size,
+          bytes: response.bytes,
+        };
+        return { content: [
+          { type: "text", text: JSON.stringify(metadata, null, 2) },
+          { type: "image", data: png.toString("base64"), mimeType: "image/png" },
+        ] };
+      } catch (error) {
+        return textResult({ ...response, imageReadError: error.message });
+      }
+    }
+    return textResult(response);
   });
 }
-console.error(`[MCP] registered ${_cmds.length} Unity tools from manifest + 3 instance tools`);
+console.error(`[AI Unity MCP Server] registered ${commands.length} Unity tools from manifest + 5 connection tools`);
 
-// ── Start ─────────────────────────────────────────────────────────────────
 const transport = new StdioServerTransport();
 await server.connect(transport);

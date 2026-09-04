@@ -1,4 +1,4 @@
-# MCP Bridge
+# AI Unity MCP Server
 
 ![Unity 6000.0+](https://img.shields.io/badge/Unity-6000.0%2B-222222)
 ![Editor only](https://img.shields.io/badge/scope-Editor--only-2d6cdf)
@@ -6,9 +6,9 @@
 
 **Let an AI assistant look at your Unity Editor — and, when you allow it, click the buttons for you.**
 
-MCP Bridge is an Editor-only package for **Unity 6** with two ways in:
+AI Unity MCP Server is an Editor-only package for **Unity 6** with two ways in:
 
-- **A chat window inside Unity** (`MCP Bridge → Chat`, or press `F12`). You ask a question; the window
+- **A chat window inside Unity** (`AI Unity MCP Server → Chat`, or press `F12`). You ask a question; the window
   collects the real Editor data first and answers from that, not from guesswork.
 - **An MCP server** (a small Node program in `Server~/`). It lets an AI agent running *outside* Unity —
   Claude Code in your terminal, or any other MCP client — inspect the same Editor and run the same
@@ -22,7 +22,7 @@ Nothing from this package ships in your game build — all of it lives in an Edi
 
 The Model Context Protocol is a standard way for an AI assistant to use tools on your computer. A
 *server* publishes a list of actions it can perform; a *client* (the AI) reads that list and calls the
-ones it needs. MCP Bridge is a server whose actions are Unity Editor operations — read the Console,
+ones it needs. AI Unity MCP Server exposes Unity Editor operations — read the Console,
 open a scene, run a performance audit, take a screenshot, and so on.
 
 </details>
@@ -49,7 +49,7 @@ open a scene, run a performance audit, take a screenshot, and so on.
 When you ask an AI for help with a Unity problem today, **you** are the one carrying the data back and
 forth:
 
-| Without MCP Bridge | With MCP Bridge |
+| Without AI Unity MCP Server | With AI Unity MCP Server |
 |---|---|
 | You copy Console errors and paste them into a chat | It reads the Console itself |
 | You describe the scene, or screenshot the Hierarchy | It reads the hierarchy itself |
@@ -73,7 +73,8 @@ places. Skim [Known rough edges](#known-rough-edges) before judging it as a gene
 |---|---|---|
 | **Unity 6** | everything | `package.json` declares `6000.0`; developed and tested on `6000.0.75f1` |
 | **An Anthropic API key** *or* **the Claude Code CLI** | the in-editor chat | CLI route: `npm i -g @anthropic-ai/claude-code`, then `claude login` |
-| **Node.js 18+** | the external MCP bridge only | the bridge uses ESM and global `fetch` |
+| **Codex CLI** | external Unity tools in Codex | install and sign in once; Unity can register the bridge through `codex mcp` |
+| **Node.js 18+** | the external AI Unity MCP Server bridge only | the bridge uses ESM and global `fetch` |
 | `com.unity.test-framework` *(optional)* | `run_tests` | without it that one assembly is skipped and the two test commands return a clear error; nothing else changes |
 | Photon Fusion 2 *(optional)* | `fusion_stats` | network readers are reflection-based and report zero when Fusion is absent, so single-player projects are unaffected |
 
@@ -81,8 +82,8 @@ Pick an install option by what you plan to do with the package:
 
 | Option | Installs from | The package is | Pick it when |
 |---|---|---|---|
-| **A** | Git URL | read-only, in `Library/PackageCache` | you just want to use MCP Bridge — simplest path |
-| **B** | Local `file:` reference | editable, stays in the folder you cloned | you edit the package source, or you want the external MCP bridge |
+| **A** | Git URL | read-only, in `Library/PackageCache` | you just want to use AI Unity MCP Server — simplest path |
+| **B** | Local `file:` reference | editable, stays in the folder you cloned | you edit or contribute to the package source |
 | **C** | A copy inside `Packages/` | editable, versioned with that project | you want the package to travel with one project |
 
 **Option A — Git URL.** **Window → Package Manager → `+` → Install package from git URL…** (called
@@ -100,13 +101,12 @@ to pin a tag, a branch or a full 40-character commit SHA (`…mcpbridge.git#v1.0
 once, writes that commit into `Packages/packages-lock.json`, and keeps the whole team there until
 someone presses **Update**.
 
-*If you also want the external MCP bridge, use Option B or C instead:* a git-URL package is immutable —
-it lands in `Library/PackageCache/com.mcpbridge@<revision>` and re-resolves under a new path on every
-update, so `Server~/node_modules/` (not in the repo) has nowhere durable to live. The in-editor chat
-needs no Node at all, so this only matters when an external agent drives the Editor.
+The external AI Unity MCP Server bridge works with this read-only install too. **Configure Codex** copies only the
+small bridge application into a versioned per-user cache and installs dependencies there; it never
+writes `node_modules` into `Library/PackageCache`.
 
 <details>
-<summary><b>Options B and C — editable installs (also what the external MCP bridge needs)</b></summary>
+<summary><b>Options B and C — editable installs</b></summary>
 
 **Option B — local `file:` reference.** Add this to the consuming project's `Packages/manifest.json`,
 adjusting the relative path to wherever this folder lives (an absolute path such as
@@ -121,7 +121,7 @@ adjusting the relative path to wherever this folder lives (an absolute path such
 ```
 
 The package stays editable at its source folder and several projects can share one clone, so this is
-the setup for contributing — and `Server~/index.js` keeps a stable path for the external bridge.
+the setup for contributing.
 
 **Option C — embedded package.** Copy this whole folder into the project's `Packages/` directory. Also
 editable, but the copy belongs to that one project.
@@ -133,17 +133,18 @@ editable, but the copy belongs to that one project.
 ## First run
 
 **1. Open the chat window.** Open Unity, wait for the compile to finish, then open
-**MCP Bridge → Chat** (or press `F12`). The window opening at all means the package installed
+**AI Unity MCP Server → Chat** (or press `F12`). The window opening at all means the package installed
 correctly.
 
 **2. Start the server.** In the chat window, go to the **Claude In** tab and press **▶ Start** (the
-menu item **MCP Bridge → Server → Start** does the same thing). The status pill in the header turns
-green / *online*.
+menu item **AI Unity MCP Server → Server → Start** does the same thing). The status pill in the header turns
+green / *online*. To start it automatically on future Editor launches, enable **AI Unity MCP Server → Server →
+Auto Start Read-Only**. Automatic and remote starts always reset **Allow Write Commands** to off.
 
 > [!IMPORTANT]
 > The server is required **even for the in-editor chat** — the chat refuses to send while it is off.
-> It restarts itself after a script recompile, but it does **not** come back on its own when you reopen
-> Unity, so expect to press Start once per session. It listens on `127.0.0.1:23457`.
+> It restarts itself after a script recompile. A Codex session can also start it with `unity_connect`,
+> or you can opt in to Auto Start Read-Only. It listens on `127.0.0.1:23457`.
 
 **3. Pick a backend.** The gear icon opens Settings:
 
@@ -155,7 +156,7 @@ green / *online*.
 **4. Sanity check.** Type `test` in the chat. It answers locally, with no model call, listing the
 server status, the write mode, and every available command.
 
-**5. Turn on writes when you need them.** **MCP Bridge → Allow Write Commands** is **off by default**.
+**5. Turn on writes when you need them.** **AI Unity MCP Server → Allow Write Commands** is **off by default**.
 Until you switch it on, every command that touches the scene, assets, Play Mode or the build is
 blocked. Read-only commands work either way.
 
@@ -192,9 +193,9 @@ chat (`play_control`) needs writes on.
   commands (Subscription mode). `Ctrl+V` pastes an image from the clipboard, **+ Image** opens a file
   picker.
 - **Monitor** panel — a background health watcher that logs memory spikes and Editor stalls to
-  `Library/DeltaMCP/monitor.log`.
+  `Library/AIUnityMCPServer/monitor.log`.
 - **Claude In** tab — every MCP command that hit this Editor (path, body, response, duration, error
-  flag), persisted to `Library/DeltaMCP/mcp_log.json`. This is where you look when an external agent is
+  flag), persisted to `Library/AIUnityMCPServer/mcp_log.json`. This is where you look when an external agent is
   driving and you want to see what it did.
 
 <details>
@@ -205,10 +206,10 @@ single call. The **🔑 Keys** button in the toolbar lists the main ones inside 
 
 | Type any of these | It runs first | Good for |
 |---|---|---|
-| `fps` `perf` `audit` `spike` `กระตุก` `เฟรมตก` | `perf_audit` | frame stats, heavy objects, batching |
+| `fps` `perf` `audit` `spike` `stutter` `frame drop` | `perf_audit` | frame stats, heavy objects, batching |
 | `gc` | `perf_audit` | allocation pressure |
-| `mem` `memory` `แรม` | `memory_snapshot` | Mono heap, native, graphics memory |
-| `console` `errors` `err` `เออเรอ` | `read_console` | recent errors and warnings |
+| `mem` `memory` `ram` | `memory_snapshot` | Mono heap, native, graphics memory |
+| `console` `errors` `err` | `read_console` | recent errors and warnings |
 | `exceptions` `exc` | `get_exceptions` | runtime exceptions with stack traces |
 | `log` | `read_logfile` | full stack traces from `Editor.log` |
 | `hier` `hierarchy` | `scene_hierarchy` | the object tree of the open scene |
@@ -227,43 +228,56 @@ calls them on purpose when they are warranted, so a stray word cannot freeze you
 
 ## External MCP clients
 
-This is the part that lets a Claude Code session in your terminal inspect and drive the running Editor.
+The recommended path is Codex-first and only needs to be configured once per machine.
 
-**1. Install the bridge dependencies once.**
+**1. Install the package by Git URL, registry, local reference or as an embedded package.** All four
+locations support the external bridge. Git and registry packages remain read-only in
+`Library/PackageCache`; Setup does not modify them.
 
-```bash
-cd Server~
-npm install
-```
+**2. In Unity, run `AI Unity MCP Server → Setup → Configure Codex`.** Setup validates Node and Codex, fingerprints
+the bridge source, then atomically bootstraps it under
+`<LocalApplicationData>/AIUnityMCPServer/runtime/<package-version>-<content-hash>`. It runs `npm ci` from
+the cached lockfile, never from the package, and registers the stable cached `index.js`
+through the official `codex mcp` CLI. The cache contains the bridge application and npm dependencies,
+not a bundled Node runtime; Node 18+ still needs to be installed on the machine.
 
-**2. Register the server with your MCP client.** With the Claude Code CLI:
+Running Setup again validates the existing cache and does not recopy files, reinstall dependencies or
+rewrite a healthy registration. If a different server already owns the `AIUnityMCPServer` key, Setup leaves it
+untouched and tells you to use **Repair Codex Registration** only when replacement is intentional.
+Repair asks before replacing that key. A package update creates a coexisting cache directory and
+Configure automatically switches a registration that is provably one of this package's older managed
+caches. Old content-hash directories remain available so already-running sessions can finish.
 
-```bash
-claude mcp add unity -- node "C:/Work/git/com.mcpbridge/Server~/index.js"
-```
+If dependency installation fails offline, reconnect and run Configure again. The completed bootstrap
+is reused, while the missing dependency step alone is retried. **Doctor** reports package-source,
+runtime-bootstrap and runtime-dependency failures separately and prints the exact cache path.
 
-Point it at wherever the package actually lives: the folder you cloned (**Option B**), the copy inside
-`Packages/` (**Option C**), or — for a git-URL install (**Option A**) — a separate clone of the repo,
-since the copy under `Library/PackageCache` is read-only and gets a new path on every update. No
-environment variables are needed; the bridge finds the Editor by itself, including when several
-Editors or ParrelSync clones are open.
+Restart Codex once after first registration so it refreshes its tool list. This global registration is
+available to new projects and new sessions; it does not need to be generated again per project.
 
-**3. Make sure the Unity server is on** (step 2 of [First run](#first-run)), then ask the agent to call
-`unity_ping`. External tool names are the command names prefixed with `unity_` — `read_console` becomes
-`unity_read_console`.
+**3. Connect from the agent.** Call `unity_connection_status`, then `unity_connect`. The latter finds
+the intended Editor, starts its server read-only when needed, follows port changes after a domain
+reload, and verifies `ping` in one call. When several projects match, it returns `AMBIGUOUS` with exact
+`instanceId` values instead of silently choosing the wrong Editor. Pass one of those IDs back to
+`unity_connect`.
 
-For editable installs (Options B and C) Unity also writes a ready-made `<UnityProject>/.mcp.json` on
-load, and repairs it when the package moves. It never overwrites a `.mcp.json` you have customised, and
-never touches one for git-URL installs. Discovery rules, the three renamed tool names, the environment
-variables that override discovery, and the full `.mcp.json` behaviour are in
-[`Documentation~/architecture.md`](Documentation~/architecture.md).
+`unity_list_instances`, `unity_select_instance`, and `unity_start_instance` remain available for
+existing workflows. All manifest commands retain their names (`read_console` becomes
+`unity_read_console`). `UNITY_PROJECT_PATH` can scope automatic discovery to one project;
+`UNITY_MCP_PORT` remains a fixed-port escape hatch.
+
+For compatibility with MCP clients that read project files, Setup also maintains a minimal
+`<UnityProject>/.mcp.json` pointing at the same stable cache (editable installs can create it directly
+on load). Codex does not use that file; its config is managed only through `codex mcp`. Custom
+`.mcp.json` files are never overwritten. Run **AI Unity MCP Server → Setup → Doctor** for a read-only report
+with actionable fixes.
 
 ---
 
 ## Command catalogue
 
 **69 Editor commands**, defined in `Server~/commands.json` — the single source shared by the Node
-bridge and the C# dispatcher — plus **3 instance-management tools** that live in the bridge itself.
+bridge and the C# dispatcher — plus **5 connection-management tools** that live in the bridge itself.
 
 | Group | Commands | What that group is for |
 |---|---|---|
@@ -274,7 +288,7 @@ bridge and the C# dispatcher — plus **3 instance-management tools** that live 
 | Play Mode inspection | 12 | Play control, value watches, event probe, raycast, navmesh path |
 | Code & project | 10 | read/edit scripts, run C#, refactor audit, compile, tests, build |
 | Other | 5 | screenshots, batching, ping/stop, Fusion stats |
-| Multi-Editor *(bridge-side)* | 3 | list Editors, select one, start a stopped one |
+| Connection *(bridge-side)* | 5 | status/connect plus backward-compatible list, select and start tools |
 
 Commands that *change* something (create, delete, set, edit, Play Mode control, batch, build, tests)
 are blocked until **Allow Write Commands** is on — see [Safety](#safety). Everything else reads.
@@ -368,10 +382,11 @@ which drives Play Mode itself and therefore needs writes on.
 
 ### Multi-Editor (bridge-side)
 
-`unity_list_instances` · `unity_select_instance` · `unity_start_instance`
+`unity_connection_status` · `unity_connect` · `unity_list_instances` · `unity_select_instance` · `unity_start_instance`
 
 Every open Editor registers itself, so an agent can list them (ParrelSync Main/Clone setups included),
-pick one, and even switch a stopped one on.
+pick one, and even switch a stopped one on. `unity_connect` is the normal entry point; the other three
+management tools remain backward compatible.
 
 </details>
 
@@ -400,24 +415,21 @@ pick one, and even switch a stopped one on.
 
 Stated up front so nothing surprises you after install.
 
-- **The UI is in Thai.** This came out of a Thai-speaking team's project: settings labels, tooltips,
-  several error strings, most code comments and the runtime-inspection guide are Thai, and the chat's
-  built-in prompt asks the model to answer in Thai using the Dev/Art format. The MCP tool descriptions
-  that external agents read are in English.
+- **The package is English-only.** Editor labels, tooltips, diagnostics, documentation and built-in
+  analysis prompts use English consistently.
 - **Live profiler recorders are switched off** by a constant (`ProfilerReader.ENABLED = false`), so
   Play Mode carries zero profiling overhead. The cost: the GC / Deep / Live buttons are hidden and live
   FPS and draw-call numbers are unavailable. Scene census, memory snapshots and frame-spike capture
   still work; naming the exact method behind a spike needs Unity's Profiler window to be recording.
   Flip the constant to get the full set back.
-- **Unity maintains `<project>/.mcp.json` for editable installs** — convenient, but the project root
-  gains a file you did not create. It backs off from anything you customised and never touches git-URL
-  installs.
-- **The Node bridge ships without its dependencies.** One `npm install` in `Server~/` is needed for
-  external MCP clients, and a read-only git-URL install has nowhere durable to put them. The in-editor
-  chat needs no Node at all.
-- **A few paths still reference the original project** (a sibling `Delta-Project` repo, used by the
-  skills picker and by an external copy of the analysis playbook). All of them fail soft and fall back
-  to embedded defaults.
+- **Unity maintains `<project>/.mcp.json` for legacy project-scoped MCP clients** — Codex registration
+  is global and managed through `codex mcp`. The legacy file backs off from anything you customised
+  and points Git/registry installs at the per-user cache only after Setup has bootstrapped it.
+- **The Node bridge ships without its dependencies or a Node runtime.** Configure Codex installs npm
+  dependencies into its per-user cache. Node 18+ remains an external prerequisite; bundling it is a
+  separate distribution concern. The in-editor chat needs no Node at all.
+- **Skills are standalone.** The picker scans only the current project and the user's skill directory;
+  the analysis playbook can come from the current project and otherwise uses the embedded default.
 - **Version 1.0.0, single-developer project.** No CI, no registry publication, no tagged release yet.
 
 ---
@@ -427,7 +439,7 @@ Stated up front so nothing surprises you after install.
 | Document | What is in it |
 |---|---|
 | [`Documentation~/architecture.md`](Documentation~/architecture.md) | Request flow, components, Editor discovery, `.mcp.json` rules, write-gate internals, repo layout, running the tests |
-| [`Documentation~/runtime-inspection-th.md`](Documentation~/runtime-inspection-th.md) | Thai-language guide to the Play Mode inspection tools |
+| [`Documentation~/runtime-inspection.md`](Documentation~/runtime-inspection.md) | Guide to the Play Mode inspection tools |
 | [`CHANGELOG.md`](CHANGELOG.md) | Release history |
 
 ---

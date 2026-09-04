@@ -7,10 +7,6 @@ using UnityEngine;
 namespace MCPBridge
 {
     /// <summary>
-    /// event_log — ดักเหตุการณ์ physics สด (OnCollision/OnTrigger) ของ GameObject ที่เลือก
-    /// โดยแปะ probe MonoBehaviour ชั่วคราวตอน Play แล้ว push เข้า ring buffer.
-    /// ใช้ตอบ "ทำไมไม่โดน / โดนซ้ำ / trigger ไม่ทำงาน" โดยไม่ต้องแก้โค้ดเกม.
-    /// probe ถูกถอด + buffer ถูกล้างอัตโนมัติเมื่อออก Play (เป็น debug tool — ไม่ persist/ไม่เข้า build).
     /// </summary>
     [InitializeOnLoad]
     public static class EventLog
@@ -26,19 +22,18 @@ namespace MCPBridge
         {
             EditorApplication.playModeStateChanged += s =>
             {
-                if (s == PlayModeStateChange.ExitingPlayMode) Clear();   // กัน probe/buffer ค้างข้าม session
+                if (s == PlayModeStateChange.ExitingPlayMode) Clear();
             };
         }
 
-        /// <summary>แปะ probe ลง object (ว่าง = ตัวที่เลือก) — คืน error หรือ null</summary>
         public static string Attach(string objectName)
         {
             var go = Resolve(objectName);
             if (go == null) return string.IsNullOrEmpty(objectName)
-                ? "เลือก GameObject ใน Hierarchy ก่อน หรือส่ง objectName"
-                : $"ไม่พบ object: {objectName}";
+                ? "Select a GameObject in the Hierarchy or provide objectName"
+                : $"Object not found: {objectName}";
 
-            if (go.GetComponent<MCPEventProbe>() != null) return null;   // มีแล้ว ไม่ถือเป็น error
+            if (go.GetComponent<MCPEventProbe>() != null) return null;
 
             var p = go.AddComponent<MCPEventProbe>();
             p.hideFlags = HideFlags.DontSave;
@@ -57,7 +52,6 @@ namespace MCPBridge
             }
         }
 
-        /// <summary>JSON ของเหตุการณ์ล่าสุด (ใหม่สุดก่อน)</summary>
         public static string GetReport()
         {
             lock (_lock)
@@ -78,7 +72,6 @@ namespace MCPBridge
             }
         }
 
-        /// <summary>ถอด probe ทั้งหมด + ล้าง buffer</summary>
         public static void Clear()
         {
             lock (_lock)
@@ -101,8 +94,7 @@ namespace MCPBridge
         }
     }
 
-    /// <summary>probe ชั่วคราว — ดัก physics callback ส่งเข้า EventLog (editor debug เท่านั้น)</summary>
-    [AddComponentMenu("")]   // ซ่อนจากเมนู Add Component
+    [AddComponentMenu("")]
     public class MCPEventProbe : MonoBehaviour
     {
         void OnCollisionEnter(Collision c) => EventLog.Push("collisionEnter", name, c.gameObject.name);

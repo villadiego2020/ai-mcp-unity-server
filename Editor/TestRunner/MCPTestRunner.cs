@@ -19,10 +19,10 @@ namespace MCPBridge
     [InitializeOnLoad]
     static class MCPTestRunner
     {
-        const string KEY_STATUS = "MCPBridge.Tests.Status";   // "idle" | "running" | "done"
-        const string KEY_MODE   = "MCPBridge.Tests.Mode";
-        const string KEY_COUNTS = "MCPBridge.Tests.Counts";   // "pass,fail,skip,total"
-        const string KEY_FAILS  = "MCPBridge.Tests.Fails";    // entries joined by REC_SEP, name/msg by FLD_SEP
+        const string KEY_STATUS = "AIUnityMCPServer.Tests.Status";   // "idle" | "running" | "done"
+        const string KEY_MODE   = "AIUnityMCPServer.Tests.Mode";
+        const string KEY_COUNTS = "AIUnityMCPServer.Tests.Counts";   // "pass,fail,skip,total"
+        const string KEY_FAILS  = "AIUnityMCPServer.Tests.Fails";    // entries joined by REC_SEP, name/msg by FLD_SEP
         const int    MAX_FAILS  = 50;
 
         // ASCII control chars as delimiters — can't appear in a test name/message
@@ -52,7 +52,7 @@ namespace MCPBridge
                 bool play = mode.StartsWith("play", StringComparison.OrdinalIgnoreCase);
 
                 if (SessionState.GetString(KEY_STATUS, "idle") == "running")
-                    return "{\"error\":\"มีชุดเทสต์กำลังรันอยู่ — poll get_test_results จน status=done ก่อน\"}";
+                    return "{\"error\":\"A test run is already active. Poll get_test_results until status=done.\"}";
 
                 // reset state
                 SessionState.SetString(KEY_STATUS, "running");
@@ -66,7 +66,7 @@ namespace MCPBridge
                 _api.Execute(new ExecutionSettings(f));
                 return $"{{\"started\":true,\"mode\":\"{(play ? "play" : "edit")}\"," +
                        (string.IsNullOrEmpty(filter) ? "" : $"\"filter\":\"{MCPHandlers.EscapeJsonPublic(filter)}\",") +
-                       "\"note\":\"poll get_test_results จน status=done\"}";
+                       "\"note\":\"Poll get_test_results until status=done.\"}";
             }
             catch (Exception e)
             {
@@ -141,7 +141,7 @@ namespace MCPBridge
 
             public void TestFinished(ITestResultAdaptor result)
             {
-                if (result.Test.IsSuite) return;   // นับเฉพาะ leaf test
+                if (result.Test.IsSuite) return;
                 if (result.TestStatus != TestStatus.Failed) return;
 
                 string acc = SessionState.GetString(KEY_FAILS, "");

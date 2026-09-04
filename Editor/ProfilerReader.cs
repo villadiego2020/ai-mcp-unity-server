@@ -7,14 +7,10 @@ using UnityEngine;
 namespace MCPBridge
 {
     /// <summary>
-    /// อ่านค่า Profiler จริงเป็นตัวเลข (ไม่ใช่จากรูป)
-    /// - Runtime (Play Mode): อ่าน live จาก ProfilerRecorder
-    /// - หลังหยุดเกม: อ่านจากเฟรมล่าสุดที่ Profiler capture ไว้ ผ่าน ProfilerDriver
     /// </summary>
     [InitializeOnLoad]
     public static class ProfilerReader
     {
-        // recorder สำหรับค่า live ระหว่าง Play Mode
         static ProfilerRecorder _mainThread, _renderThread;
         static ProfilerRecorder _drawCalls, _setPassCalls, _batches, _triangles, _vertices;
         static ProfilerRecorder _gcAlloc, _gcReserved, _totalReserved, _totalUsed;
@@ -29,38 +25,29 @@ namespace MCPBridge
 
         static void OnBeforeReload()
         {
-            // ProfilerDriver.enabled ค้างอยู่หลัง play session → ทำให้ profiler เก็บข้อมูลระหว่าง reload ด้วย
             if (_active) CacheLastValues();
             try { ProfilerDriver.enabled = false; } catch { }
         }
 
-        static bool _hasCaptured;   // เคยเก็บค่าจาก Play Mode หรือยัง
+        static bool _hasCaptured;
 
         static void OnPlayModeChanged(PlayModeStateChange state)
         {
             if (state == PlayModeStateChange.EnteredPlayMode) StartRecorders();
-            // ไม่ dispose ตอนหยุด — เก็บค่าเฟรมสุดท้ายไว้ให้ Claude วิเคราะห์ได้
             else if (state == PlayModeStateChange.EnteredEditMode && _active) CacheLastValues();
         }
 
-        const int HISTORY = 300;   // เก็บ ~5 วินาทีที่ 60fps เพื่อคำนวณสถิติ + spike
+        const int HISTORY = 300;
 
-        // ปิดระบบ profiler ชั่วคราว: ProfilerDriver.enabled=true + recorders ทำให้ Unity กิน CPU/RAM เพิ่มตอน Play
-        // ตั้ง true เพื่อเปิดกลับ (live stats / perf keyword / 📍GC / 🔬Deep จะกลับมาทำงาน)
         const bool ENABLED = false;
 
         static void StartRecorders()
         {
-            if (!ENABLED) return;   // ปิดชั่วคราว → ไม่เปิด Profiler / ไม่ start recorder = ไม่มี overhead ตอน Play
-            // เปิด profiler recording เอง → ProfilerDriver มี CPU call-tree ให้ DeepAnalysis อ่าน
-            // โดยไม่ต้องเปิดหน้าต่าง Profiler. (นี่คือ profiling ปกติ — ไม่ใช่ Deep Profile ตัวหนัก
-            // ที่ทำเครื่องค้าง; deepProfiling ปล่อยเป็น false)
+            if (!ENABLED) return;
             try
             {
                 UnityEditorInternal.ProfilerDriver.enabled = true;
                 UnityEditorInternal.ProfilerDriver.deepProfiling = false;
-                // เก็บ managed callstack ของทุก GC.Alloc → ชี้ method+บรรทัดที่ alloc จริงได้
-                // (default ปิด เพื่อไม่ให้มี overhead ตอนเล่นเทสต์ปกติ — เปิดผ่าน toggle ข้างปุ่ม Profiler)
                 UnityEngine.Profiling.Profiler.enableAllocationCallstacks = AllocCallstacks;
             }
             catch { }
@@ -81,9 +68,8 @@ namespace MCPBridge
             _active = true;
         }
 
-        static string _cachedSnapshot;  // ค่าเฟรมสุดท้ายก่อนหยุดเกม
+        static string _cachedSnapshot;
 
-        // เก็บค่าเป็นข้อความก่อน recorder จะ invalid แล้ว dispose
         static void CacheLastValues()
         {
             _cachedSnapshot = BuildLiveReport("Last frame before stop");
@@ -99,7 +85,6 @@ namespace MCPBridge
         }
 
         /// <summary>
-        /// คืนค่า Profiler เป็นข้อความสรุป ส่งให้ Claude วิเคราะห์ได้เลย
         /// </summary>
         public static string Snapshot()
         {
@@ -112,23 +97,20 @@ namespace MCPBridge
                 return "=== Unity Profiler ===\n(No data yet — press Play so the recorders can capture Profiler values, " +
                        "then click this button during play or after stopping.)";
 
-            // ต่อด้วย: spike + network monitor (jitter/ping spike) + เจาะลึก call tree
             return summary + SpikeMonitor.GetReport() + (NetMonitor.GetReport() ?? "") + ProfilerDeepReader.DeepAnalysis();
         }
 
-        // ── report เฉพาะ GC (ปุ่ม GC-only) — GC/frame ปัจจุบัน + top allocators + โค้ด ──
         public static string GcReport()
         {
-            var sb = new StringBuilder("=== GC (เฉพาะ memory allocation) ===\n");
+            var sb = new StringBuilder("=== GC (memory allocation only) ===\n");
             if (IsLive)
-                sb.AppendLine($"GC Allocated / frame: {Bytes(_gcAlloc.LastValue)}  (target: ~0 — alloc ทุกเฟรม = stutter)");
+                sb.AppendLine($"GC Allocated / frame: {Bytes(_gcAlloc.LastValue)}  (target: ~0; per-frame allocation causes stutter)");
             if (!AllocCallstacks)
-                sb.AppendLine("(หมายเหตุ: เปิด toggle 📍 GC ในแชต แล้วเล่นซ้ำจุดที่ alloc → จะชี้ method+บรรทัดที่ alloc จริงได้)");
+                sb.AppendLine("(Enable the GC toggle in chat and reproduce the allocation to identify the allocating method and line.)");
             sb.Append(ProfilerDeepReader.GcReport());
             return sb.ToString();
         }
 
-        // ── report เฉพาะ Network (ปุ่ม Net-only) — jitter monitor + RTT/bandwidth ──
         public static string NetworkReport()
         {
             var sb = new StringBuilder();
@@ -138,11 +120,7 @@ namespace MCPBridge
             return sb.ToString();
         }
 
-        // ── GC allocation callstack capture (toggle ข้างปุ่ม Profiler) ──────
-        // default ปิด: เล่นเทสต์ปกติไม่มี overhead · เปิด: ทุก GC.Alloc เก็บ callstack
-        //  → ProfilerDeepReader ชี้ method+บรรทัดที่ alloc จริงได้ (ไม่ต้อง Deep Profile)
-        // flip ได้ตอน Play โดยไม่ต้องรีเพลย์ (callstack จะเก็บเฉพาะ alloc หลังเปิด)
-        const string ALLOC_CS_PREF = "DeltaMCP_AllocCallstacks";
+        const string ALLOC_CS_PREF = "AIUnityMCPServer_AllocCallstacks";
         public static bool AllocCallstacks
         {
             get => EditorPrefs.GetBool(ALLOC_CS_PREF, false);
@@ -153,8 +131,6 @@ namespace MCPBridge
             }
         }
 
-        // GC toggle = บังคับปิดทุกครั้งที่ domain reload (เปิด Unity ใหม่ / recompile)
-        // — เปิดได้เฉพาะตอน Play เท่านั้น (ดูปุ่มใน MCPChatWindow) จึงไม่คงสถานะข้าม reload
         [InitializeOnLoadMethod]
         static void ForceAllocCallstacksOffOnReload()
         {
@@ -162,22 +138,18 @@ namespace MCPBridge
             try { UnityEngine.Profiling.Profiler.enableAllocationCallstacks = false; } catch { }
         }
 
-        // ── Live stats (สำหรับแผง real-time ในแชต) ──────────────────────────
         public static bool IsLive => Application.isPlaying && _active;
 
-        // คืนค่าปัจจุบันแบบกระชับ 2 บรรทัด สำหรับแสดงสด
         public static string LiveStats()
         {
             if (!IsLive) return null;
             double ms = _mainThread.LastValue * 1e-6;
             double fps = ms > 0 ? 1000.0 / ms : 0;
-            // ลด string length: ตัด RTT/ping, short names (DC=DrawCalls, GC=allocation)
             return
                 $"FPS {fps:F0} | {ms:F1}ms | DC {_drawCalls.LastValue} | SetPass {_setPassCalls.LastValue}\n" +
                 $"GC {Bytes(_gcAlloc.LastValue)} | Tris {(_triangles.LastValue / 1000):F1}K | Mem {Bytes(_totalUsed.LastValue)}";
         }
 
-        // ค่า FPS ปัจจุบัน (ใช้ทำแถบสี)
         public static float CurrentFps()
         {
             if (!IsLive) return 0;
@@ -189,7 +161,6 @@ namespace MCPBridge
         {
             var sb = new StringBuilder();
 
-            // อ่าน history เป็น ms
             var frameMs = SamplesMs(_mainThread);
             var renderMs = SamplesMs(_renderThread);
             var gcBytes = SamplesRaw(_gcAlloc);
@@ -207,25 +178,23 @@ namespace MCPBridge
                 double p99 = Percentile(frameMs, 99);
                 double worst = frameMs[n - 1];
                 double onePctLow = OnePercentLowFps(frameMs);
-                double tenthPctLow = LowFps(frameMs, 0.001);  // 0.1% low (spike หนักสุด)
+                double tenthPctLow = LowFps(frameMs, 0.001);
 
-                // นับ stutter = เฟรมที่ช้ากว่า median 1.5 เท่า
                 int stutters = 0;
                 foreach (var f in frameMs) if (f > median * 1.5) stutters++;
 
-                // CPU-bound vs GPU/Render-bound (เทียบ main vs render thread)
                 double mainAvg = avg, renderAvg = Mean(renderMs);
                 string bound = renderAvg > mainAvg * 1.15
-                    ? $"GPU/Render-bound (render {renderAvg:F1}ms > main {mainAvg:F1}ms) → แก้ rendering: draw call/overdraw/shader/tris"
-                    : $"CPU-bound (main {mainAvg:F1}ms ≥ render {renderAvg:F1}ms) → แก้ script/physics/GC";
+                    ? $"GPU/Render-bound (render {renderAvg:F1}ms > main {mainAvg:F1}ms) → optimize draw calls, overdraw, shaders and triangles"
+                    : $"CPU-bound (main {mainAvg:F1}ms ≥ render {renderAvg:F1}ms) → optimize scripts, physics and GC";
 
                 sb.AppendLine("\n-- Frame Time (Main Thread) --");
                 sb.AppendLine($"Avg: {avg:F2} ms (~{1000.0 / avg:F0} FPS)  |  Median: {median:F2} ms");
                 sb.AppendLine($"p95: {p95:F2} ms  |  p99: {p99:F2} ms  |  Worst: {worst:F2} ms");
-                sb.AppendLine($"1% Low: {onePctLow:F0} FPS  |  0.1% Low: {tenthPctLow:F0} FPS  ← ตัวชี้ความลื่น");
+                sb.AppendLine($"1% Low: {onePctLow:F0} FPS  |  0.1% Low: {tenthPctLow:F0} FPS  ← frame-pacing indicators");
                 sb.AppendLine($"Stutter frames (>1.5x median): {stutters}/{n}  ({100.0 * stutters / n:F1}%)");
                 sb.AppendLine($"Render Thread avg: {renderAvg:F2} ms");
-                sb.AppendLine($"\n** Bound: {bound} **");   // ← บอกว่าควรแก้ฝั่งไหน
+                sb.AppendLine($"\n** Bound: {bound} **");
             }
 
             if (gcBytes.Length > 0)
@@ -235,7 +204,7 @@ namespace MCPBridge
                 sb.AppendLine("\n-- GC Allocation --");
                 sb.AppendLine($"Frames with GC alloc: {gcFrames}/{gcBytes.Length}  ({100.0 * gcFrames / gcBytes.Length:F0}%)");
                 sb.AppendLine($"Avg/frame: {Bytes((long)(totalGc / gcBytes.Length))}  |  Worst frame: {Bytes((long)maxGc)}");
-                sb.AppendLine($"Total over window: {Bytes((long)totalGc)}  ← ยิ่งสูง = GC ทำงานบ่อย = กระตุก");
+                sb.AppendLine($"Total over window: {Bytes((long)totalGc)}  ← larger totals mean more frequent GC and more stutter risk");
             }
 
             sb.AppendLine("\n-- Rendering (current) --");
@@ -271,7 +240,6 @@ namespace MCPBridge
             double s = 0; foreach (var v in a) s += v; return s / a.Length;
         }
 
-        // a ต้อง sort แล้ว
         static double Percentile(double[] sorted, double p)
         {
             if (sorted.Length == 0) return 0;
@@ -279,10 +247,8 @@ namespace MCPBridge
             return sorted[idx];
         }
 
-        // เฉลี่ย FPS ของ 1% เฟรมที่แย่ที่สุด (มาตรฐานวัดความลื่น)
         static double OnePercentLowFps(double[] sorted) => LowFps(sorted, 0.01);
 
-        // เฉลี่ย FPS ของ fraction เฟรมที่แย่สุด (0.01 = 1%, 0.001 = 0.1%)
         static double LowFps(double[] sorted, double fraction)
         {
             if (sorted.Length == 0) return 0;
@@ -293,7 +259,6 @@ namespace MCPBridge
             return avgMs > 0 ? 1000.0 / avgMs : 0;
         }
 
-        // CPU vs GPU bound แบบสั้น (สำหรับแผง Live)
         public static string BoundStatus()
         {
             if (!IsLive) return "";

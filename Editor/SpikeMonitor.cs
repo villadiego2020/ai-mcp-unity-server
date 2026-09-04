@@ -8,9 +8,6 @@ using UnityEngine;
 namespace MCPBridge
 {
     /// <summary>
-    /// คอยจับ FPS drop / frame spike อัตโนมัติระหว่าง Play Mode (ไม่ต้องกดเอง)
-    /// เฟรมไหนช้ากว่าเกณฑ์ → บันทึกเป็น spike event พร้อม frame index + GC
-    /// ดูผลได้ตอนกด 📊 Attach Profiler (Snapshot จะแนบ spike report ให้)
     /// </summary>
     [InitializeOnLoad]
     public static class SpikeMonitor
@@ -20,7 +17,7 @@ namespace MCPBridge
             public double Ms;
             public long Gc;
             public int FrameIndex;
-            public string Cause;   // ตัวการ (top GC/CPU ของเฟรมนั้น)
+            public string Cause;
         }
 
         static ProfilerRecorder _mainThread, _gcAlloc;
@@ -34,7 +31,7 @@ namespace MCPBridge
             EditorApplication.playModeStateChanged += OnPlayMode;
         }
 
-        static float ThresholdMs => EditorPrefs.GetFloat("DeltaMCP_SpikeMs", 33.3f); // < 30fps = spike
+        static float ThresholdMs => EditorPrefs.GetFloat("AIUnityMCPServer_SpikeMs", 33.3f); // < 30fps = spike
 
         static void OnPlayMode(PlayModeStateChange state)
         {
@@ -63,62 +60,54 @@ namespace MCPBridge
             double ms = _mainThread.LastValue * 1e-6; // ns → ms
             if (ms < ThresholdMs) return;
 
-            // กันบันทึกเฟรมเดิมซ้ำ
             int frame = ProfilerDriver.lastFrameIndex;
             if (frame == _lastFrame) return;
             _lastFrame = frame;
 
-            // บันทึกแบบเบาๆ เท่านั้น (ms/gc/frame) — ห้ามอ่าน call-tree ที่นี่!
-            // (เดิมเรียก TopContributor ทุก spike → ตอน FPS ต่ำทุกเฟรมเป็น spike → วน loop ทำ FPS ตกหนัก)
             _spikes.Add(new Spike { Ms = ms, Gc = _gcAlloc.LastValue, FrameIndex = frame, Cause = null });
             if (_spikes.Count > MAX_SPIKES) _spikes.RemoveAt(0);
         }
 
-        /// <summary>worst เท่านั้น — spike หนักสุด + โค้ดตัวการ (สำหรับปุ่ม/keyword "worst")</summary>
         public static string WorstReport()
         {
             if (_spikes.Count == 0)
-                return "=== Worst Spike ===\n(ยังไม่พบ FPS drop ระหว่างเล่นรอบนี้ — ดี! เกณฑ์ > " +
+                return "=== Worst Spike ===\n(No FPS drop has been captured in this Play Mode session. Threshold > " +
                        ThresholdMs.ToString("F0") + " ms)";
             int worstIdx = 0;
             for (int i = 1; i < _spikes.Count; i++)
                 if (_spikes[i].Ms > _spikes[worstIdx].Ms) worstIdx = i;
             var w = _spikes[worstIdx];
 
-            var sb = new StringBuilder("=== Worst Spike (หนักสุดของรอบเล่นนี้) ===\n");
+            var sb = new StringBuilder("=== Worst Spike (largest in this Play Mode session) ===\n");
             sb.AppendLine($"{w.Ms:F1} ms (~{1000.0 / w.Ms:F0} FPS), GC {Bytes(w.Gc)} @frame #{w.FrameIndex}");
-            sb.AppendLine($"(จับได้ {_spikes.Count} spike รวม — นี่คืออันหนักสุด)");
+            sb.AppendLine($"({_spikes.Count} spikes captured; this is the largest)");
             string src = ProfilerDeepReader.FrameCulpritWithSource(w.FrameIndex);
-            if (!string.IsNullOrEmpty(src)) { sb.AppendLine("\n-- ตัวการ + โค้ดจริง --"); sb.Append(src); }
-            else sb.AppendLine("(เฟรมนี้หา call-tree ไม่ได้แล้ว — ลองกด worst ใหม่ตอนเพิ่งเกิด spike)");
+            if (!string.IsNullOrEmpty(src)) { sb.AppendLine("\n-- Contributor and source --"); sb.Append(src); }
+            else sb.AppendLine("(The call tree for this frame is no longer available. Request the worst spike again immediately after it occurs.)");
             return sb.ToString();
         }
 
-        /// <summary>รายงาน spike ที่จับได้ + เจาะลึกตัวการของเฟรมที่แย่สุด</summary>
         public static string GetReport()
         {
             if (_spikes.Count == 0)
-                return "\n=== Auto Spike Monitor ===\n(ยังไม่พบ FPS drop — เกณฑ์ปัจจุบัน > " + ThresholdMs.ToString("F0") +
-                       " ms. กด Play แล้วเล่นให้เกิดการกระตุกก่อน)";
+                return "\n=== Auto Spike Monitor ===\n(No FPS drop captured. Current threshold > " + ThresholdMs.ToString("F0") +
+                       " ms. Enter Play Mode and reproduce the stutter.)";
 
             var sb = new StringBuilder();
-            sb.AppendLine($"\n=== Auto Spike Monitor — พบ {_spikes.Count} spike ระหว่างเล่น ===");
-            sb.AppendLine($"(เกณฑ์: เฟรม > {ThresholdMs:F0} ms = ต่ำกว่า {1000f / ThresholdMs:F0} FPS)");
+            sb.AppendLine($"\n=== Auto Spike Monitor — {_spikes.Count} spikes captured ===");
+            sb.AppendLine($"(Threshold: frame > {ThresholdMs:F0} ms = below {1000f / ThresholdMs:F0} FPS)");
 
-            // หา spike ที่แย่สุด
             int worstIdx = 0;
             for (int i = 1; i < _spikes.Count; i++)
                 if (_spikes[i].Ms > _spikes[worstIdx].Ms) worstIdx = i;
             var worst = _spikes[worstIdx];
 
-            // อ่านตัวการ "ตอนนี้" (on-demand) เฉพาะเฟรมแย่สุด — ไม่ทำใน Sample loop
             string worstCause = ProfilerDeepReader.TopContributor(worst.FrameIndex);
-            sb.AppendLine($"\nแย่สุด: {worst.Ms:F1} ms (~{1000.0 / worst.Ms:F0} FPS), GC {Bytes(worst.Gc)} @frame #{worst.FrameIndex}");
+            sb.AppendLine($"\nWorst: {worst.Ms:F1} ms (~{1000.0 / worst.Ms:F0} FPS), GC {Bytes(worst.Gc)} @frame #{worst.FrameIndex}");
             if (!string.IsNullOrEmpty(worstCause))
-                sb.AppendLine($"  ตัวการ → {worstCause}");
+                sb.AppendLine($"  Contributor → {worstCause}");
 
-            // list spike (เรียงแย่สุดก่อน เอา 8 อัน) — คำนวณ cause เฉพาะ 3 อันแรกพอ (กันช้า)
-            sb.AppendLine("\nSpike ที่จับได้:");
+            sb.AppendLine("\nCaptured spikes:");
             var sorted = new List<Spike>(_spikes);
             sorted.Sort((a, b) => b.Ms.CompareTo(a.Ms));
             for (int i = 0; i < Mathf.Min(sorted.Count, 8); i++)
@@ -129,7 +118,6 @@ namespace MCPBridge
                 sb.AppendLine($"  {sp.Ms:F0}ms (~{1000.0 / sp.Ms:F0}fps)  ←  {tail}");
             }
 
-            // ping ปัจจุบัน
             string net = ProfilerDeepReader.NetworkLine();
             if (!string.IsNullOrEmpty(net))
                 sb.AppendLine($"\nNetwork: {net}");

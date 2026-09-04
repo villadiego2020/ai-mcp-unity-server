@@ -7,8 +7,6 @@ using UnityEngine;
 namespace MCPBridge
 {
     /// <summary>
-    /// ExceptionTracker — บันทึก Exception/Error ที่เกิดขึ้น (rolling buffer 50 entries)
-    /// dedup ถ้า message เดิมมาอีกภายใน 60s — ใช้วิเคราะห์ bug โดย AI
     /// </summary>
     [InitializeOnLoad]
     public static class ExceptionTracker
@@ -40,7 +38,6 @@ namespace MCPBridge
             lock (_lock)
             {
                 var now = DateTime.Now;
-                // ตรวจ dedup — message เดิมภายใน 60s → increment count เท่านั้น
                 foreach (var e in _buffer)
                 {
                     if (e.message == message && (now - e.lastSeen).TotalSeconds <= DEDUP_SECONDS)
@@ -51,7 +48,6 @@ namespace MCPBridge
                     }
                 }
 
-                // entry ใหม่
                 var entry = new Entry
                 {
                     message = message,
@@ -68,7 +64,6 @@ namespace MCPBridge
 
         // ── Extract helpers ───────────────────────────────────────────────────
 
-        // ดึง type จาก message เช่น "NullReferenceException: Object ref..." → "NullReferenceException"
         static string ExtractType(string message)
         {
             if (string.IsNullOrEmpty(message)) return "Unknown";
@@ -78,7 +73,6 @@ namespace MCPBridge
             return cut > 0 ? message.Substring(0, cut) : message;
         }
 
-        // ดึงบรรทัดแรกจาก stack trace ที่มี "Assets/"
         static string ExtractFirstLine(string stack)
         {
             if (string.IsNullOrEmpty(stack)) return "";
@@ -87,19 +81,16 @@ namespace MCPBridge
                 string trimmed = line.Trim();
                 if (trimmed.Contains("Assets/")) return trimmed;
             }
-            // fallback: บรรทัดแรก
             string first = stack.Split('\n')[0].Trim();
             return first.Length > 100 ? first.Substring(0, 100) + "…" : first;
         }
 
         // ── Public API ────────────────────────────────────────────────────────
 
-        /// <summary>JSON ของ exceptions ล่าสุด เรียงตาม lastSeen desc</summary>
         public static string GetReport(int max = 20)
         {
             lock (_lock)
             {
-                // เรียงตาม lastSeen ล่าสุดก่อน
                 var sorted = new List<Entry>(_buffer);
                 sorted.Sort((a, b) => b.lastSeen.CompareTo(a.lastSeen));
 
@@ -113,7 +104,6 @@ namespace MCPBridge
                     var e = sorted[i];
                     string exType   = ExtractType(e.message);
                     string firstLine = ExtractFirstLine(e.stackTrace);
-                    // จำกัด stack ไม่ให้ยาวเกิน
                     string stack = e.stackTrace.Length > 400 ? e.stackTrace.Substring(0, 400) + "…" : e.stackTrace;
 
                     sb.Append("{");
@@ -132,7 +122,6 @@ namespace MCPBridge
             }
         }
 
-        /// <summary>ล้าง buffer ทั้งหมด</summary>
         public static void Clear()
         {
             lock (_lock) { _buffer.Clear(); }

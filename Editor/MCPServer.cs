@@ -13,24 +13,27 @@ namespace MCPBridge
     [InitializeOnLoad]
     public static class MCPServer
     {
-        // ใช้ TcpListener (raw socket) แทน HttpListener
-        // เหตุผล: HttpListener ผูกกับ HTTP.sys (kernel) ถ้า Unity crash/force-quit
-        // → kernel ถือ port ค้างเป็น zombie จน reboot. TcpListener คืน port ทันทีที่ process ตาย.
-        // ── Multi-instance: Main=23457, Clone N=23458+N (ParrelSync) — bridge เลือก target จาก registry ──
         const int BASE_PORT = 23457;
-        const int PORT_RANGE = 10;   // 23457..23466 — กัน auto-increment วิ่งไกล
-        static int _port;            // port ที่ instance นี้ bind จริง
+        const int PORT_RANGE = 10;
+        const int PRESENCE_SCHEMA_VERSION = 2;
+        const double HEARTBEAT_INTERVAL = 2.0;
+        const double REGISTRY_SWEEP_INTERVAL = 30.0;
+        enum PresenceServerState { Offline, Online }
+        static int _port;
 
         static TcpListener _listener;
         static Thread _thread;
         static volatile bool _running;
 
-        // ── identity ของ instance นี้ (ตรวจจาก ParrelSync) ──────────────────────
         static string _label;        // "Main" / "Clone 0" / "Clone 1"
+        static string _instanceId;
+        static long _startedAtUnixMs;
+        static double _lastHeartbeat;
+        static double _lastRegistrySweep;
         public static string Label => _label ?? (_label = DetectLabel());
-        public static int Port => _port;   // port ที่ bind จริง (0 = ยังไม่ start)
+        public static string InstanceId => _instanceId ?? (_instanceId = CreateStableInstanceId());
+        public static int Port => _port;
 
-        // ตรวจว่าเป็น ParrelSync clone ไหม + index — ใช้ path ของ project (ไม่ผูก asmdef กับ ParrelSync)
         static string DetectLabel()
         {
             try
@@ -39,7 +42,6 @@ namespace MCPBridge
                 string proj = Directory.GetParent(Application.dataPath)?.Name ?? "";
                 var m = System.Text.RegularExpressions.Regex.Match(proj, @"_clone_(\d+)$");
                 if (m.Success) return $"Clone {m.Groups[1].Value}";
-                // ยืนยันด้วย ParrelSync API ถ้ามี (reflection) — IsClone() == true แต่ path ไม่เข้า pattern
                 var t = FindType("ParrelSync.ClonesManager");
                 var mi = t?.GetMethod("IsClone", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
                 if (mi != null && mi.Invoke(null, null) is bool b && b) return "Clone";
@@ -54,57 +56,100 @@ namespace MCPBridge
             return m.Success ? int.Parse(m.Value) + 1 : 0;   // Main=0 → 23457, Clone 0=1 → 23458
         }
 
+        static string CreateStableInstanceId()
+        {
+            string projectPath = ToForwardSlashes(ProjectRoot()).TrimEnd('/');
+            if (Application.platform == RuntimePlatform.WindowsEditor)
+            {
+                projectPath = projectPath.ToLowerInvariant();
+            }
+
+            return "unity-" + Hash128.Compute(projectPath).ToString();
+        }
+
+        static long UnixMillisecondsNow() =>
+            (DateTime.UtcNow.Ticks - 621355968000000000L) / TimeSpan.TicksPerMillisecond;
+
         static Type FindType(string fullName)
         {
             foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
             {
-                try { var t = asm.GetType(fullName); if (t != null) return t; } catch { }
+                try
+                {
+                    var type = asm.GetType(fullName);
+                    if (type != null)
+                    {
+                        return type;
+                    }
+                }
+                catch (Exception exception)
+                {
+                    Debug.LogWarning($"[AI Unity MCP Server] Inspect assembly '{asm.FullName}' failed: {exception.Message}");
+                }
             }
             return null;
         }
 
-        // SessionState: persist ผ่าน domain reload (recompile) แต่ reset ตอนเปิด Unity ใหม่
-        // → ใช้แทน EditorPrefs เพื่อแยก "recompile" ออกจาก "เปิด Unity ใหม่"
         static bool WasRunning
         {
-            get => SessionState.GetBool("DeltaMCP_WasRunning", false);
-            set => SessionState.SetBool("DeltaMCP_WasRunning", value);
+            get => SessionState.GetBool("AIUnityMCPServer_WasRunning", false);
+            set => SessionState.SetBool("AIUnityMCPServer_WasRunning", value);
+        }
+
+        static bool AutoStartEnabled
+        {
+            get => EditorPrefs.GetBool("AIUnityMCPServer_AutoStart", false);
+            set => EditorPrefs.SetBool("AIUnityMCPServer_AutoStart", value);
         }
 
         static MCPServer()
         {
+            if (ShouldSkipCurrentProcess())
+            {
+                return;
+            }
+
+            _startedAtUnixMs = UnixMillisecondsNow();
             MCPHandlers.LoadLog();
 
-            // .mcp.json เต็มเสมอ → Node bridge โหลดทุก session → unity_ping เรียกได้ตลอด
-            // (gate จริงอยู่ที่ /unity-mcp-open + TcpListener ON/OFF ไม่ใช่ที่ .mcp.json)
-            // delayCall: ต้องรอให้ PackageManager/AssetDatabase พร้อมก่อน (static ctor เร็วเกินไป)
             EditorApplication.delayCall += EnsureMcpJson;
 
+            StartHeartbeat();
+
             if (WasRunning)
-                Start();          // recompile กลางคัน → restore TcpListener อัตโนมัติ
+                Start();
+            else if (AutoStartEnabled)
+                StartReadOnly();
             else
             {
-                WritePresence(false);   // เปิด editor แต่ server OFF → ลงทะเบียนให้ AI เห็น (เลือกมาสั่ง start ได้)
-                StartWatching();        // เฝ้า trigger file รอ AI สั่งเปิด
+                WriteOfflinePresence();
+                StartWatching();
             }
 
             AssemblyReloadEvents.beforeAssemblyReload += () =>
             {
                 MCPHandlers.SaveLog();
-                StopInternal();   // stop listener (presence → serverOn:false, domain ใหม่ rewrite)
+                StopHeartbeat();
+                StopInternal();
             };
             EditorApplication.quitting += () =>
             {
                 MCPHandlers.SaveLog();
+                StopHeartbeat();
                 StopInternal();
-                RemovePresence();   // ปิด editor จริง → ถอน presence ออกจาก registry
+                RemovePresence();
             };
         }
 
-        public static bool IsRunning => _running;
+        static bool ShouldSkipCurrentProcess() =>
+            Application.isBatchMode || AssetDatabase.IsAssetImportWorkerProcess();
 
-        const string MENU_START = "MCP Bridge/Server/Start";
-        const string MENU_STOP  = "MCP Bridge/Server/Stop";
+        public static bool IsRunning => _running;
+        public static bool IsAutoStartEnabled => AutoStartEnabled;
+
+        const string MENU_START = "AI Unity MCP Server/Server/Start";
+        const string MENU_STOP  = "AI Unity MCP Server/Server/Stop";
+        const string MENU_AUTO_START = "AI Unity MCP Server/Server/Auto Start Read-Only";
 
         [MenuItem(MENU_START, true)]
         static bool ValidateStart()
@@ -120,8 +165,25 @@ namespace MCPBridge
             return _running;
         }
 
-        // ── Toggle: อนุญาตคำสั่งที่แก้ scene/asset (default = ปิด = read-only) ──
-        const string MENU_WRITE = "MCP Bridge/Allow Write Commands";
+        [MenuItem(MENU_AUTO_START, true)]
+        static bool ValidateAutoStart()
+        {
+            Menu.SetChecked(MENU_AUTO_START, AutoStartEnabled);
+            return true;
+        }
+
+        [MenuItem(MENU_AUTO_START)]
+        static void ToggleAutoStart()
+        {
+            AutoStartEnabled = !AutoStartEnabled;
+            Debug.Log($"[AI Unity MCP Server] Auto Start Read-Only {(AutoStartEnabled ? "enabled" : "disabled")}");
+            if (AutoStartEnabled && !_running)
+            {
+                StartReadOnly();
+            }
+        }
+
+        const string MENU_WRITE = "AI Unity MCP Server/Allow Write Commands";
 
         [MenuItem(MENU_WRITE, true)]
         static bool ValidateWrite()
@@ -134,7 +196,7 @@ namespace MCPBridge
         static void ToggleWrite()
         {
             MCPHandlers.AllowWrites = !MCPHandlers.AllowWrites;
-            Debug.Log($"[MCP] Write commands {(MCPHandlers.AllowWrites ? "ENABLED" : "disabled (read-only)")}");
+            Debug.Log($"[AI Unity MCP Server] Write commands {(MCPHandlers.AllowWrites ? "ENABLED" : "disabled (read-only)")}");
         }
 
         [MenuItem(MENU_START)]
@@ -142,42 +204,57 @@ namespace MCPBridge
         {
             if (_running) return;
 
-            CleanTrigger();        // เคลียร์ trigger file ค้าง กัน re-trigger ไม่ตั้งใจ
-            StopInternal();        // กันซ้อน: ถ้ามี listener/thread เก่าค้าง ปิดให้สนิทก่อน (idempotent)
+            CleanTrigger();
+            StopInternal();
 
             if (!TryBind())
             {
-                Debug.LogWarning($"[MCP] เปิด server ไม่ได้: ไม่มี port ว่างในช่วง {BASE_PORT}..{BASE_PORT + PORT_RANGE - 1} (instance อื่นถือหมด/zombie)");
-                StartWatching();   // ยังอยู่ OFF → เฝ้า trigger ต่อ
+                Debug.LogWarning($"[AI Unity MCP Server] Could not start: no free port in {BASE_PORT}..{BASE_PORT + PORT_RANGE - 1}. Another instance or stale process may own them.");
+                StartWatching();
                 return;
             }
 
             _running = true;
             WasRunning = true;
-            StopWatching();      // server ON → ไม่ต้องเฝ้า trigger แล้ว (overhead = 0)
-            WritePresence(true); // presence → serverOn:true + actual port
-            _thread = new Thread(Listen) { IsBackground = true, Name = "MCP-Server" };
+            StopWatching();
+            WriteOnlinePresence(); // presence → serverOn:true + actual port
+            _thread = new Thread(Listen) { IsBackground = true, Name = "AIUnityMCPServer-Server" };
             _thread.Start();
-            Debug.Log($"[MCP] Server started — {Label} @ port {_port}");
+            Debug.Log($"[AI Unity MCP Server] Server started — {Label} @ port {_port}");
         }
 
-        // bind port: เลือกตาม clone index ก่อน (Main=23457, Clone N=23458+N) แล้ว scan ช่วงที่เหลือ
-        // ไม่ใช้ ReuseAddress → bind ล้มเหลวถ้า port ถูก instance อื่นถืออยู่ (ได้ port ต่างกันจริง)
+        static void StartReadOnly()
+        {
+            MCPHandlers.AllowWrites = false;
+            Start();
+        }
+
         static bool TryBind()
         {
             int prefer = BASE_PORT + CloneIndex();
             for (int i = 0; i < PORT_RANGE; i++)
             {
                 int p = BASE_PORT + (((prefer - BASE_PORT) + i) % PORT_RANGE);
+                TcpListener candidate = null;
                 try
                 {
-                    var l = new TcpListener(IPAddress.Loopback, p);
-                    l.Start();
-                    _listener = l;
+                    candidate = new TcpListener(IPAddress.Loopback, p);
+                    candidate.Start();
+                    _listener = candidate;
                     _port = p;
                     return true;
                 }
-                catch { try { _listener?.Server?.Dispose(); } catch { } _listener = null; }
+                catch (SocketException)
+                {
+                    candidate?.Stop();
+                    _listener = null;
+                }
+                catch (Exception exception)
+                {
+                    candidate?.Stop();
+                    _listener = null;
+                    Debug.LogWarning($"[AI Unity MCP Server] Bind port {p} failed: {exception.Message}");
+                }
             }
             return false;
         }
@@ -186,50 +263,81 @@ namespace MCPBridge
         public static void Stop()
         {
             WasRunning = false;
-            StopInternal();   // ปิด TcpListener เท่านั้น — ไม่แตะ .mcp.json (bridge ยังโหลดได้)
+            StopInternal();
         }
 
-        // หยุด TcpListener โดยไม่แตะ WasRunning (ใช้ตอน recompile/quit)
         static void StopInternal()
         {
             if (!_running && _listener == null) return;
             _running = false;
-            WritePresence(false);   // server ปิดแต่ editor ยังเปิด → presence serverOn:false (ยังเห็นใน list, AI สั่ง start ได้)
-            try { _listener?.Stop(); } catch { }
-            try { _listener?.Server?.Dispose(); } catch { }   // ปิด socket ให้สนิท คืน port (กัน zombie)
+            WriteOfflinePresence();
+            try { _listener?.Stop(); }
+            catch (Exception exception) { Debug.LogWarning($"[AI Unity MCP Server] Stop listener failed: {exception.Message}"); }
+            try { _listener?.Server?.Dispose(); }
+            catch (Exception exception) { Debug.LogWarning($"[AI Unity MCP Server] Dispose listener failed: {exception.Message}"); }
             _listener = null;
-            try { _thread?.Join(300); } catch { }
+            try { _thread?.Join(300); }
+            catch (Exception exception) { Debug.LogWarning($"[AI Unity MCP Server] Join listener thread failed: {exception.Message}"); }
             _thread = null;
-            _lastWatchCheck = 0;   // reset throttle → watcher เช็ครอบแรกเร็วหลัง stop
-            StartWatching();       // server OFF → กลับมาเฝ้า trigger รอ AI สั่งเปิด
-            Debug.Log("[MCP] Server stopped");
+            _lastWatchCheck = 0;
+            StartWatching();
+            Debug.Log("[AI Unity MCP Server] Server stopped");
         }
 
-        // ── Presence registry: ทุก editor (server ON/OFF) เขียนไฟล์ลง registry dir ──
+        static void StartHeartbeat()
+        {
+            EditorApplication.update -= HeartbeatUpdate;
+            EditorApplication.update += HeartbeatUpdate;
+            _lastHeartbeat = 0;
+            _lastRegistrySweep = 0;
+        }
+
+        static void StopHeartbeat()
+        {
+            EditorApplication.update -= HeartbeatUpdate;
+        }
+
+        static void HeartbeatUpdate()
+        {
+            double now = EditorApplication.timeSinceStartup;
+            if (now - _lastHeartbeat < HEARTBEAT_INTERVAL)
+            {
+                return;
+            }
+
+            _lastHeartbeat = now;
+            bool shouldSweep = now - _lastRegistrySweep >= REGISTRY_SWEEP_INTERVAL;
+            if (shouldSweep)
+            {
+                _lastRegistrySweep = now;
+            }
+
+            if (shouldSweep)
+            {
+                SweepRegistry();
+            }
+
+            WriteCurrentPresence();
+        }
+
         // key = PID → <dir>/<pid>.json = {pid, label, project, projectPath, port, serverOn}
-        // เขียน 2 ที่เสมอ (Node bridge อ่านทั้งคู่แล้ว dedupe ด้วย pid):
-        //   1) per-project <originalRoot>/Library/DeltaMCP/instances — ของเดิม (gitignored)
-        //      clone เป็น sibling ชื่อ <orig>_clone_N → ตัด suffix → Main/Clone ใช้ registry เดียวกัน
-        //   2) shared ทั้งเครื่อง ~/.mcpbridge/instances — จำเป็นเพราะ Node ไม่มี PackageManager API:
-        //      ถ้าติดตั้งแบบ local "file:" ref ตัว index.js อยู่นอก Unity project → คำนวณ project root
-        //      จาก path ของตัวเองไม่ได้เลย. home dir เป็นจุดเดียวที่ทั้ง C# และ Node คำนวณตรงกันเสมอ
+        //   1) per-project <originalRoot>/Library/AIUnityMCPServer/instances (gitignored)
         static string ProjectInstancesDir()
         {
             string projRoot = Directory.GetParent(Application.dataPath).FullName;   // .../<project>[_clone_N]
-            string parent   = Directory.GetParent(projRoot).FullName;              // parent ร่วม
+            string parent   = Directory.GetParent(projRoot).FullName;
             string name     = Path.GetFileName(projRoot);
             var m = System.Text.RegularExpressions.Regex.Match(name, @"^(.*)_clone_\d+$");
             string origRoot = m.Success ? Path.Combine(parent, m.Groups[1].Value) : projRoot;
-            return CreateDirOrEmpty(Path.Combine(origRoot, "Library", "DeltaMCP", "instances"));
+            return CreateDirOrEmpty(Path.Combine(origRoot, "Library", "AIUnityMCPServer", "instances"));
         }
 
         static string SharedInstancesDir()
         {
             string home = HomeDir();
-            return string.IsNullOrEmpty(home) ? "" : CreateDirOrEmpty(Path.Combine(home, ".mcpbridge", "instances"));
+            return string.IsNullOrEmpty(home) ? "" : CreateDirOrEmpty(Path.Combine(home, ".AIUnityMCPServer", "instances"));
         }
 
-        // ตรงกับ os.homedir() ฝั่ง Node (Windows: USERPROFILE, macOS/Linux: HOME)
         static string HomeDir()
         {
             string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
@@ -241,7 +349,7 @@ namespace MCPBridge
         static string CreateDirOrEmpty(string dir)
         {
             try { Directory.CreateDirectory(dir); return dir; }
-            catch (Exception e) { Debug.LogWarning($"[MCP] สร้าง registry dir ไม่ได้: {dir} ({e.Message})"); return ""; }
+            catch (Exception e) { Debug.LogWarning($"[AI Unity MCP Server] Could not create registry directory: {dir} ({e.Message})"); return ""; }
         }
 
         static List<string> InstancesDirs()
@@ -257,26 +365,71 @@ namespace MCPBridge
         static int Pid => System.Diagnostics.Process.GetCurrentProcess().Id;
         static string PresenceFileName => $"{Pid}.json";
 
-        // เขียน presence ของ editor นี้ — serverOn:true → port จริง, false → preferred port
-        static void WritePresence(bool serverOn)
+        static void WriteOnlinePresence()
+        {
+            SweepRegistry();
+            WritePresence(PresenceServerState.Online);
+        }
+
+        static void WriteOfflinePresence()
+        {
+            SweepRegistry();
+            WritePresence(PresenceServerState.Offline);
+        }
+
+        static void WriteCurrentPresence()
+        {
+            WritePresence(_running ? PresenceServerState.Online : PresenceServerState.Offline);
+        }
+
+        static void WritePresence(PresenceServerState serverState)
         {
             try
             {
-                SweepRegistry();   // ล้าง entry ของ editor ที่ตายไปแล้วก่อน
+                bool serverOn = serverState == PresenceServerState.Online;
                 string projPath = Directory.GetParent(Application.dataPath)?.FullName ?? "";
                 string proj = Path.GetFileName(projPath);
                 int port = serverOn ? _port : (BASE_PORT + CloneIndex());   // off → preferred
-                string json = $"{{\"pid\":{Pid},\"label\":\"{Escape(Label)}\",\"project\":\"{Escape(proj)}\","
-                            + $"\"projectPath\":\"{Escape(projPath.Replace("\\", "/"))}\",\"port\":{port},"
-                            + $"\"serverOn\":{(serverOn ? "true" : "false")}}}";
+                string json = $"{{\"schemaVersion\":{PRESENCE_SCHEMA_VERSION},\"instanceId\":\"{Escape(InstanceId)}\","
+                            + $"\"pid\":{Pid},\"processKind\":\"editor\",\"label\":\"{Escape(Label)}\","
+                            + $"\"project\":\"{Escape(proj)}\",\"projectPath\":\"{Escape(ToForwardSlashes(projPath))}\","
+                            + $"\"port\":{port},\"serverOn\":{(serverOn ? "true" : "false")},"
+                            + $"\"heartbeatUnixMs\":{UnixMillisecondsNow()},\"startedAtUnixMs\":{_startedAtUnixMs},"
+                            + $"\"packageVersion\":\"{Escape(MCPPackagePaths.PackageVersion())}\"}}";
                 foreach (var dir in InstancesDirs())
                 {
-                    // UTF8 ไม่ใส่ BOM — ไม่งั้น Node JSON.parse พัง (Encoding.UTF8 ใส่ BOM นำหน้า)
-                    try { File.WriteAllText(Path.Combine(dir, PresenceFileName), json, new System.Text.UTF8Encoding(false)); }
-                    catch (Exception e) { Debug.LogWarning($"[MCP] WritePresence ลง {dir} ไม่สำเร็จ: {e.Message}"); }
+                    try { WritePresenceAtomically(Path.Combine(dir, PresenceFileName), json); }
+                    catch (Exception e) { Debug.LogWarning($"[AI Unity MCP Server] Could not write presence to {dir}: {e.Message}"); }
                 }
             }
-            catch (Exception e) { Debug.LogWarning($"[MCP] WritePresence failed: {e.Message}"); }
+            catch (Exception e) { Debug.LogWarning($"[AI Unity MCP Server] WritePresence failed: {e.Message}"); }
+        }
+
+        static void WritePresenceAtomically(string destinationPath, string json)
+        {
+            string temporaryPath = destinationPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            File.WriteAllText(temporaryPath, json, new UTF8Encoding(false));
+
+            try
+            {
+                if (File.Exists(destinationPath))
+                {
+                    File.Replace(temporaryPath, destinationPath, null);
+                }
+                else
+                {
+                    File.Move(temporaryPath, destinationPath);
+                }
+            }
+            catch
+            {
+                if (File.Exists(temporaryPath))
+                {
+                    File.Delete(temporaryPath);
+                }
+
+                throw;
+            }
         }
 
         static void RemovePresence()
@@ -284,12 +437,10 @@ namespace MCPBridge
             foreach (var dir in InstancesDirs())
             {
                 try { File.Delete(Path.Combine(dir, PresenceFileName)); }
-                catch (Exception e) { Debug.LogWarning($"[MCP] ถอน presence จาก {dir} ไม่สำเร็จ: {e.Message}"); }
+                catch (Exception e) { Debug.LogWarning($"[AI Unity MCP Server] Could not remove presence from {dir}: {e.Message}"); }
             }
         }
 
-        // ลบ entry ที่ process ตายแล้ว (editor crash ไม่ได้ถอน presence)
-        // shared registry สะสม entry ของทุกโปรเจกต์ในเครื่อง → editor ตัวไหนก็ได้ที่ทำงานอยู่ช่วยกวาดให้
         static void SweepRegistry()
         {
             foreach (var dir in InstancesDirs())
@@ -299,7 +450,7 @@ namespace MCPBridge
                     foreach (var f in Directory.GetFiles(dir, "*.json"))
                         DeleteIfProcessDead(f);
                 }
-                catch (Exception e) { Debug.LogWarning($"[MCP] SweepRegistry ที่ {dir} ล้มเหลว: {e.Message}"); }
+                catch (Exception e) { Debug.LogWarning($"[AI Unity MCP Server] Registry sweep failed at {dir}: {e.Message}"); }
             }
         }
 
@@ -309,31 +460,27 @@ namespace MCPBridge
             {
                 var m = System.Text.RegularExpressions.Regex.Match(File.ReadAllText(presenceFile), "\"pid\"\\s*:\\s*(\\d+)");
                 if (!m.Success) return;
-                try { System.Diagnostics.Process.GetProcessById(int.Parse(m.Groups[1].Value)); }  // ตาย → throw
+                try { System.Diagnostics.Process.GetProcessById(int.Parse(m.Groups[1].Value)); }
                 catch { File.Delete(presenceFile); }
             }
-            catch (Exception e) { Debug.LogWarning($"[MCP] อ่าน/ลบ presence {presenceFile} ไม่ได้: {e.Message}"); }
+            catch (Exception e) { Debug.LogWarning($"[AI Unity MCP Server] Could not read or remove presence file {presenceFile}: {e.Message}"); }
         }
 
-        // ── Watcher: เฝ้า trigger file รอ AI สั่งเปิด (เฉพาะตอน server OFF) ──────
-        // throttle ~1.5 วิ/ครั้ง · subscribe เฉพาะตอน OFF · unsubscribe ตอน ON (overhead 0)
-        // editor-only — ถูกตัดออกจาก build เกมจริง 100%
         static bool   _watching;
         static double _lastWatchCheck;
         const  double WATCH_INTERVAL = 1.5;
 
         static string RequestStartPath()
         {
-            string dir = Path.Combine(Application.dataPath, "..", "Library", "DeltaMCP");
+            string dir = Path.Combine(Application.dataPath, "..", "Library", "AIUnityMCPServer");
             Directory.CreateDirectory(dir);
             return Path.Combine(dir, "request-start");
         }
 
-        // ลบ trigger file ค้าง (ตอน start) — กัน stale trigger ทำให้ re-trigger ไม่ตั้งใจ
         static void CleanTrigger()
         {
             try { var p = RequestStartPath(); if (File.Exists(p)) File.Delete(p); }
-            catch { }
+            catch (Exception exception) { Debug.LogWarning($"[AI Unity MCP Server] Clean start request failed: {exception.Message}"); }
         }
 
         static void StartWatching()
@@ -361,97 +508,84 @@ namespace MCPBridge
                 string p = RequestStartPath();
                 if (File.Exists(p))
                 {
-                    File.Delete(p);   // กิน trigger ก่อน กันวน
-                    Debug.Log("[MCP] request-start detected → AI สั่งเปิด server");
-                    Start();          // Start() จะ StopWatching() ให้เอง
+                    File.Delete(p);
+                    Debug.Log("[AI Unity MCP Server] request-start detected; starting the server read-only");
+                    StartReadOnly();
                 }
             }
-            catch (Exception e) { Debug.LogWarning($"[MCP] watch error: {e.Message}"); }
+            catch (Exception e) { Debug.LogWarning($"[AI Unity MCP Server] watch error: {e.Message}"); }
         }
 
-        // ── .mcp.json — ให้ project root มี config ที่ชี้ไปที่ Server~/index.js ของ package นี้จริง ──
-        // path คำนวณจาก PackageManager (resolvedPath) → ถูกทั้ง embedded package และ local "file:" ref
-        // ไฟล์ที่ผู้ใช้แก้เอง (มี server ตัวอื่น/คีย์อื่น) จะไม่ถูกเขียนทับ — เตือนอย่างเดียว
         static void EnsureMcpJson()
         {
             try
             {
-                // git URL / registry install: Server~ ไปอยู่ใน Library/PackageCache ซึ่งอ่านอย่างเดียว
-                // และเปลี่ยน path ทุกครั้งที่ update → ไม่แตะ .mcp.json เลย ปล่อยให้ผู้ใช้ชี้ไป clone ของตัวเอง
-                if (IsImmutablePackageInstall()) return;
-
-                string serverEntry = ServerEntryPath();
+                string serverEntry = ResolveLegacyClientServerEntry();
                 if (string.IsNullOrEmpty(serverEntry) || !File.Exists(serverEntry))
                 {
-                    Debug.LogWarning($"[MCP] หา Server~/index.js ของ package ไม่เจอ — ข้ามการเขียน .mcp.json (ลองแล้ว: '{serverEntry}')");
                     return;
                 }
 
+                EnsureMcpJsonForServerEntry(serverEntry);
+            }
+            catch (Exception e) { Debug.LogWarning($"[AI Unity MCP Server] EnsureMcpJson failed: {e.Message}"); }
+        }
+
+        internal static void EnsureMcpJsonForServerEntry(string serverEntry)
+        {
+            try
+            {
                 string projectRoot = ProjectRoot();
-                string mcpPath     = Path.Combine(projectRoot, ".mcp.json");
-                string argsPath    = McpArgsPath(serverEntry, projectRoot);
-                string generated   = GeneratedMcpJson(argsPath);
+                string mcpPath = Path.Combine(projectRoot, ".mcp.json");
+                string argsPath = McpArgsPath(serverEntry, projectRoot);
+                string generated = GeneratedMcpJson(argsPath);
 
                 if (!File.Exists(mcpPath)) { WriteTextNoBom(mcpPath, generated); return; }
 
                 string existing = File.ReadAllText(mcpPath);
                 if (IsGeneratedByThisPackage(existing))
                 {
-                    if (existing.Trim() != generated.Trim()) WriteTextNoBom(mcpPath, generated);   // path เก่า/ย้ายที่ → ซ่อมให้
+                    if (existing.Trim() != generated.Trim()) WriteTextNoBom(mcpPath, generated);
                     return;
                 }
+
                 WarnIfUnityEntryPathIsBroken(existing, projectRoot, argsPath, mcpPath);
             }
-            catch (Exception e) { Debug.LogWarning($"[MCP] EnsureMcpJson failed: {e.Message}"); }
+            catch (Exception exception)
+            {
+                Debug.LogWarning("[AI Unity MCP Server] EnsureMcpJsonForServerEntry failed: " + exception.Message);
+            }
         }
 
-        static string ProjectRoot() => Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
+        static string ResolveLegacyClientServerEntry()
+        {
+            if (!IsImmutablePackageInstall())
+            {
+                return ServerEntryPath();
+            }
 
-        static UnityEditor.PackageManager.PackageInfo ThisPackage() =>
-            UnityEditor.PackageManager.PackageInfo.FindForAssembly(typeof(MCPServer).Assembly);
+            if (!MCPRuntimeCache.TryCreatePlan(out MCPRuntimeCache.Plan runtimePlan, out _))
+            {
+                return "";
+            }
 
-        // แก้ไขไม่ได้ = ติดตั้งจาก git URL / registry (อยู่ใน Library/PackageCache)
-        // null = ไม่ได้ติดตั้งเป็น package (โค้ดวางใน Assets/ ตรงๆ) → แก้ไขได้
+            return MCPRuntimeCache.Inspect(runtimePlan, out _) == MCPRuntimeCache.CacheState.Ready
+                ? runtimePlan.ServerEntryPath
+                : "";
+        }
+
+        static string ProjectRoot() => MCPPackagePaths.ProjectRoot();
+
         static bool IsImmutablePackageInstall()
         {
-            var info = ThisPackage();
-            return info != null
-                && info.source != UnityEditor.PackageManager.PackageSource.Local
-                && info.source != UnityEditor.PackageManager.PackageSource.Embedded;
-        }
-
-        // path จริงบนดิสก์ของ package นี้ — resolvedPath ครอบคลุมทั้ง embedded (<project>/Packages/...)
-        // และ local "file:" ref (โฟลเดอร์ต้นทางนอก project ซึ่งคำนวณจาก path ของ project ไม่ได้)
-        static string PackageRootPath()
-        {
-            var info = ThisPackage();
-            if (info != null && !string.IsNullOrEmpty(info.resolvedPath) && Directory.Exists(info.resolvedPath))
-                return info.resolvedPath;
-            return PackageRootFromAsmdef();
-        }
-
-        // fallback: ไม่ได้ติดตั้งเป็น package (โค้ดถูกวางใน Assets/ ตรงๆ) → หาจากที่อยู่ของ asmdef
-        static string PackageRootFromAsmdef()
-        {
-            const string asmdefName = "UnityMCP.Editor";
-            foreach (var guid in AssetDatabase.FindAssets($"{asmdefName} t:AssemblyDefinitionAsset"))
-            {
-                string assetPath = AssetDatabase.GUIDToAssetPath(guid);
-                if (!assetPath.EndsWith($"/{asmdefName}.asmdef", StringComparison.Ordinal)) continue;
-                string editorDir = Directory.GetParent(Path.GetFullPath(assetPath))?.FullName;
-                string root = string.IsNullOrEmpty(editorDir) ? "" : Directory.GetParent(editorDir)?.FullName;
-                if (!string.IsNullOrEmpty(root)) return root;
-            }
-            return "";
+            return MCPPackagePaths.IsImmutableInstall();
         }
 
         static string ServerEntryPath()
         {
-            string root = PackageRootPath();
-            return string.IsNullOrEmpty(root) ? "" : Path.Combine(root, "Server~", "index.js");
+            return MCPPackagePaths.ServerEntryPath();
         }
 
-        // อยู่ใน project → path สัมพัทธ์ (commit ร่วมกับทีมได้) · อยู่นอก project → absolute
         internal static string McpArgsPath(string serverEntry, string projectRoot)
         {
             string entry = ToForwardSlashes(Path.GetFullPath(serverEntry));
@@ -464,23 +598,19 @@ namespace MCPBridge
         static string ToForwardSlashes(string path) => path.Replace("\\", "/");
 
         internal static string GeneratedMcpJson(string argsPath) =>
-            "{\n  \"mcpServers\": {\n    \"unity\": {\n      \"command\": \"node\",\n      \"args\": [\""
+            "{\n  \"mcpServers\": {\n    \"AIUnityMCPServer\": {\n      \"command\": \"node\",\n      \"args\": [\""
             + argsPath.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"]\n    }\n  }\n}\n";
 
-        // ไฟล์ที่ "เราเป็นคนเขียนเอง" = มีแค่ mcpServers.unity ที่รัน node กับ args เส้นเดียว
-        // เข้าเงื่อนไขนี้เท่านั้นถึงจะเขียนทับได้ — ไฟล์ที่ผู้ใช้เติม server อื่นเข้าไปจะไม่ตรง pattern
         internal static bool IsGeneratedByThisPackage(string json) =>
             System.Text.RegularExpressions.Regex.IsMatch(json,
-                "^\\s*\\{\\s*\"mcpServers\"\\s*:\\s*\\{\\s*\"unity\"\\s*:\\s*\\{\\s*\"command\"\\s*:\\s*\"node\"\\s*,"
+                "^\\s*\\{\\s*\"mcpServers\"\\s*:\\s*\\{\\s*\"AIUnityMCPServer\"\\s*:\\s*\\{\\s*\"command\"\\s*:\\s*\"node\"\\s*,"
                 + "\\s*\"args\"\\s*:\\s*\\[\\s*\"[^\"]*\"\\s*\\]\\s*\\}\\s*\\}\\s*\\}\\s*$");
 
-        const string WARNED_MCP_JSON_KEY = "DeltaMCP_WarnedMcpJson";
+        const string WARNED_MCP_JSON_KEY = "AIUnityMCPServer_WarnedMcpJson";
 
-        // ไฟล์ของผู้ใช้: ถ้ามี entry "unity" แต่ path ที่ชี้ไม่มีอยู่จริง → เตือนครั้งเดียวต่อ session
-        // ไม่มี entry "unity" เลย = ผู้ใช้ลงทะเบียน server ไว้ที่อื่น (claude mcp add) → เงียบไว้
         static void WarnIfUnityEntryPathIsBroken(string json, string projectRoot, string correctArgs, string mcpPath)
         {
-            var m = System.Text.RegularExpressions.Regex.Match(json, "\"unity\"\\s*:\\s*\\{[\\s\\S]*?\"args\"\\s*:\\s*\\[\\s*\"([^\"]+)\"");
+            var m = System.Text.RegularExpressions.Regex.Match(json, "\"AIUnityMCPServer\"\\s*:\\s*\\{[\\s\\S]*?\"args\"\\s*:\\s*\\[\\s*\"([^\"]+)\"");
             if (!m.Success) return;
 
             string configured = m.Groups[1].Value;
@@ -489,8 +619,8 @@ namespace MCPBridge
             if (SessionState.GetBool(WARNED_MCP_JSON_KEY, false)) return;
 
             SessionState.SetBool(WARNED_MCP_JSON_KEY, true);
-            Debug.LogWarning($"[MCP] {mcpPath} ชี้ไปที่ '{configured}' ซึ่งไม่มีอยู่จริง — แก้ args เป็น \"{correctArgs}\" "
-                           + "(ไฟล์นี้มีการแก้ไขเองจึงไม่ถูกเขียนทับให้)");
+            Debug.LogWarning($"[AI Unity MCP Server] {mcpPath} points to missing entry '{configured}'. Set args to \"{correctArgs}\". "
+                           + "The file was customized, so it was not overwritten automatically.");
         }
 
         static void WriteTextNoBom(string path, string text) =>
@@ -505,9 +635,9 @@ namespace MCPBridge
                     var client = _listener.AcceptTcpClient();
                     ThreadPool.QueueUserWorkItem(_ => HandleClient(client));
                 }
-                catch (SocketException) { break; }       // listener ถูก Stop()
+                catch (SocketException) { break; }
                 catch (ObjectDisposedException) { break; }
-                catch (Exception e) { Debug.LogError($"[MCP] Listen error: {e.Message}"); }
+                catch (Exception e) { Debug.LogError($"[AI Unity MCP Server] Listen error: {e.Message}"); }
             }
         }
 
@@ -520,7 +650,6 @@ namespace MCPBridge
                 {
                     client.ReceiveTimeout = 5000;
 
-                    // ── อ่าน HTTP request: header จน "\r\n\r\n" แล้วอ่าน body ตาม Content-Length ──
                     var ms = new MemoryStream();
                     var buf = new byte[8192];
                     int headerEnd = -1, contentLength = 0;
@@ -552,14 +681,12 @@ namespace MCPBridge
                     if (headerEnd >= 0 && contentLength > 0 && headerEnd + 4 + contentLength <= all.Length)
                         body = Encoding.UTF8.GetString(all, headerEnd + 4, contentLength);
 
-                    // ── แยก query string ออกจาก path → merge เข้า body ──
                     int qIdx = path.IndexOf('?');
                     string query = qIdx >= 0 ? path.Substring(qIdx + 1) : "";
                     if (qIdx >= 0) path = path.Substring(0, qIdx);
                     if (!string.IsNullOrEmpty(query) && (string.IsNullOrEmpty(body) || body == "{}"))
                         body = QueryToJson(query);
 
-                    // ── เรียก handler (จัดการ main-thread ภายใน Dispatch) ──
                     string result;
                     int status = 200;
                     try { result = MCPHandlers.Dispatch(path, body); }
@@ -570,7 +697,7 @@ namespace MCPBridge
             }
             catch (Exception e)
             {
-                Debug.LogError($"[MCP] Request error: {e.Message}");
+                Debug.LogError($"[AI Unity MCP Server] Request error: {e.Message}");
             }
         }
 
@@ -588,7 +715,6 @@ namespace MCPBridge
             stream.Flush();
         }
 
-        // หา "\r\n\r\n" ใน buffer
         static int IndexOfCrlfCrlf(byte[] data, int len)
         {
             for (int i = 0; i + 3 < len; i++)
@@ -620,7 +746,6 @@ namespace MCPBridge
             return parts.Length >= 2 ? parts[1] : "/";
         }
 
-        // แปลง "type=Transform&active=true" → {"type":"Transform","active":true}
         static string QueryToJson(string query)
         {
             if (string.IsNullOrEmpty(query)) return "{}";
@@ -631,7 +756,6 @@ namespace MCPBridge
                 if (eq < 0) continue;
                 string k = Uri.UnescapeDataString(pair.Substring(0, eq));
                 string v = Uri.UnescapeDataString(pair.Substring(eq + 1));
-                // ตรวจ type: number / bool / string
                 bool isBool = v == "true" || v == "false";
                 bool isNum  = double.TryParse(v, System.Globalization.NumberStyles.Any,
                                 System.Globalization.CultureInfo.InvariantCulture, out _);
