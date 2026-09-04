@@ -1,3 +1,3 @@
 # OPEN WORK
 
-- [CMM-004 Add UI Toolkit capability pack for UXML and USS](work/CMM-004.md) — Ready to work; Atlas and Prism define the contract, Forge implements, and Sentinel verifies.
+- [CMM-003 Semantic-version scoped-registry publishing](work/CMM-003.md) — Ready to work; Atlas selects the registry and migration contract, Forge implements, and Sentinel verifies.

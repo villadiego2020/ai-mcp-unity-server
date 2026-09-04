@@ -12,7 +12,8 @@
 
 # FEATURE
 
-(ยังไม่มี)
+- [CMM-002 Unity CLI and pipeline integration](archive/CMM-002.md) — Official Pipeline 0.6.0-exp.1 now exposes two native commands through the existing dispatcher without replacing Node/TCP; static Unity 6 compilation and 17 Node tests passed. Watch: live discovery remains blocked by the local UPM host error.
+- [CMM-004 UI Toolkit capability pack](archive/CMM-004.md) — Four bounded inspect/validate/apply/playtest tools added with fail-closed write gating, deterministic plan hashes, rollback, and screenshot evidence; 17 Node/MCP tests and Unity 6 static compilation passed. Watch: Unity Test Runner runtime is blocked by the local UPM host error.
 
 # ANALYSIS
 
