@@ -3,7 +3,7 @@ using System.Text;
 using UnityEditor;
 using UnityEngine;
 
-namespace MCPBridge
+namespace AIUnityMCPServer
 {
     /// <summary>
     /// (mesh/collider/material/rigidbody/particle/light/script/Fusion)

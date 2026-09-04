@@ -9,7 +9,7 @@ using UnityEditor.SceneManagement;
 using UnityEngine;
 using UnityEngine.Profiling;
 
-namespace MCPBridge
+namespace AIUnityMCPServer
 {
     public static partial class MCPHandlers
     {

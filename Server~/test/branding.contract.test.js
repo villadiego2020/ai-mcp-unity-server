@@ -14,6 +14,12 @@ const forbiddenBrandPatterns = [
   /Delta-Project/i,
   /delta-unity/i,
 ];
+const forbiddenProjectIdentityPatterns = [
+  /ai-unity-mcp-server/i,
+  new RegExp("github\\.com/(?:Smile-Codes|villadiego2020)/" + "mcp" + "bridge" + "(?:\\.git)?", "i"),
+  new RegExp("[A-Za-z]:[/\\\\][^\\r\\n\"'`]*[/\\\\]com\\." + "mcp" + "bridge" + "[/\\\\]Server~", "i"),
+  new RegExp("file:\\.\\.[/\\\\]\\.\\.[/\\\\]com\\." + "mcp" + "bridge" + "\\b", "i"),
+];
 
 function filesUnder(directory, predicate) {
   const output = [];
@@ -27,7 +33,7 @@ function filesUnder(directory, predicate) {
 }
 
 function maintainedTextFiles(directory) {
-  const excludedDirectories = new Set([".git", "node_modules", "Library", "Temp", "Logs", "obj", "UserSettings"]);
+  const excludedDirectories = new Set([".git", ".agent-memory", "node_modules", "Library", "Temp", "Logs", "obj", "UserSettings"]);
   const output = [];
   for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
     if (entry.isDirectory() && excludedDirectories.has(entry.name)) continue;
@@ -74,10 +80,36 @@ test("production and documentation contain only the canonical AI Unity MCP Serve
 
   const packageManifest = JSON.parse(fs.readFileSync(path.join(packageRoot, "package.json"), "utf8"));
   const serverManifest = JSON.parse(fs.readFileSync(path.join(packageRoot, "Server~", "package.json"), "utf8"));
-  assert.equal(packageManifest.name, "com.mcpbridge");
+  const serverLock = JSON.parse(fs.readFileSync(path.join(packageRoot, "Server~", "package-lock.json"), "utf8"));
+  assert.equal(packageManifest.name, "com.villadiego.ai-mcp-unity-server");
+  assert.equal(packageManifest.version, "2.0.0");
   assert.equal(packageManifest.displayName, "AI Unity MCP Server");
-  assert.equal(packageManifest.author.name, "AI Unity MCP Server");
-  assert.equal(serverManifest.name, "ai-unity-mcp-server");
+  assert.equal(packageManifest.author.name, "villadiego2020");
+  assert.equal(serverManifest.name, "ai-mcp-unity-server");
+  assert.equal(serverManifest.version, "2.0.0");
+  assert.equal(serverLock.name, "ai-mcp-unity-server");
+  assert.equal(serverLock.version, "2.0.0");
+  assert.equal(serverLock.packages[""].name, "ai-mcp-unity-server");
+  assert.equal(serverLock.packages[""].version, "2.0.0");
+});
+
+test("external project identity uses the canonical repository slug", () => {
+  const violations = [];
+  for (const file of maintainedTextFiles(packageRoot)) {
+    if (path.resolve(file) === path.resolve(thisTestFile)) continue;
+    const content = fs.readFileSync(file, "utf8");
+    for (const pattern of forbiddenProjectIdentityPatterns) {
+      if (pattern.test(content)) {
+        violations.push(`${path.relative(packageRoot, file)} matches ${pattern}`);
+      }
+    }
+  }
+  assert.deepEqual(violations, []);
+
+  const readme = fs.readFileSync(path.join(packageRoot, "README.md"), "utf8");
+  assert.match(readme, /github\.com\/villadiego2020\/ai-mcp-unity-server\.git/);
+  assert.match(readme, /"com\.villadiego\.ai-mcp-unity-server":\s*"2\.0\.0"/);
+  assert.doesNotMatch(readme, /C:[/\\]Work[/\\]git/i);
 });
 
 test("canonical storage paths and MCP server key are wired consistently", () => {
@@ -114,11 +146,11 @@ test("translated command manifest preserves its executable contract", () => {
   const hash = crypto.createHash("sha256")
     .update(JSON.stringify(commandContract(manifest)))
     .digest("hex");
-  assert.equal(hash, "845eb8d4bdbfd3c3dffdf31f023084b12b18c3be27ac78b1bcc5a98c75e87dbf");
-  assert.equal(manifest.commands.length, 69);
-  assert.equal(new Set(manifest.commands.map(command => command.tool)).size, 69);
-  assert.equal(new Set(manifest.commands.map(command => command.command)).size, 69);
-  assert.equal(new Set(manifest.commands.map(command => command.path)).size, 69);
+  assert.equal(hash, "0bd39ac04298f84d1795e94ba253d8508d78de76befde114df70b23512c6bbeb");
+  assert.equal(manifest.commands.length, 73);
+  assert.equal(new Set(manifest.commands.map(command => command.tool)).size, 73);
+  assert.equal(new Set(manifest.commands.map(command => command.command)).size, 73);
+  assert.equal(new Set(manifest.commands.map(command => command.path)).size, 73);
 
   const dispatcherSource = filesUnder(path.join(packageRoot, "Editor"), file => /^MCPHandlers(?:\.[^.]+)?\.cs$/.test(path.basename(file)))
     .map(file => fs.readFileSync(file, "utf8"))

@@ -9,7 +9,7 @@ using UnityEngine;
 using UnityEngine.U2D;
 using UnityEngine.UI;
 
-namespace MCPBridge
+namespace AIUnityMCPServer
 {
     public static partial class MCPHandlers
     {
@@ -89,6 +89,10 @@ namespace MCPBridge
                 { "set_import_settings", "/asset/import-settings" }, { "capture_screenshot", "/view/screenshot" },
                 { "build_player", "/build/player" },            { "git_status", "/git/status" },
                 { "run_tests", "/tests/run" },                  { "get_test_results", "/tests/results" },
+                { "uitk_inspect", "/uitk/inspect" },           { "uitk_validate", "/uitk/validate" },
+                { "uitk_apply", "/uitk/apply" },               { "uitk_playtest", "/uitk/playtest" },
+                { "unity_uitk_inspect", "/uitk/inspect" },     { "unity_uitk_validate", "/uitk/validate" },
+                { "unity_uitk_apply", "/uitk/apply" },         { "unity_uitk_playtest", "/uitk/playtest" },
             };
             try
             {
@@ -212,7 +216,7 @@ namespace MCPBridge
             s == null ? "" : s.Length > max ? s.Substring(0, max) + "…" : s;
 
         // ── Optional Test Runner hooks ──────────────────────────────────────
-        //   set by MCPBridge.Editor.TestRunner (separate assembly) at load time. null = the
+        //   set by AIUnityMCPServer.Editor.TestRunner (separate assembly) at load time. null = the
         //   com.unity.test-framework package isn't installed → route returns a helpful error.
         public static Func<string, string> RunTestsHandler;
         public static Func<string, string> GetTestResultsHandler;
@@ -235,8 +239,18 @@ namespace MCPBridge
                 _recent.Enqueue(now);
             }
 
-            if (WritePaths.Contains(path) && !AllowWrites)
+            bool requestRequiresWrite = WritePaths.Contains(path) || UIToolkitRequestRequiresWrite(path, body);
+            if (requestRequiresWrite && !AllowWrites)
             {
+                if (path == "/uitk/apply" || path == "/uitk/playtest")
+                {
+                    var blocked = UIToolkitJson.Error(
+                        "READ_ONLY",
+                        $"Allow Write Commands is OFF for '{path}'.",
+                        "Enable AI Unity MCP Server/Allow Write Commands in Unity, then retry the same mutating request.");
+                    AppendLog(path, body, blocked, 0);
+                    return blocked;
+                }
                 var ro = $"{{\"error\":\"READ-ONLY mode blocked '{path}'. Enable AI Unity MCP Server/Allow Write Commands before modifying scenes or assets.\"}}";
                 AppendLog(path, body, ro, 0);
                 return ro;
@@ -318,9 +332,13 @@ namespace MCPBridge
                 "/build/player"            => BuildPlayer(body),
                 "/git/status"              => GitStatus(body),
                 "/tests/run"               => RunTestsHandler != null ? ExecuteOnMainThread(() => RunTestsHandler(body))
-                                              : "{\"error\":\"Test Runner is unavailable. Install com.unity.test-framework; MCPBridge.Editor.TestRunner will load automatically.\"}",
+                                              : "{\"error\":\"Test Runner is unavailable. Install com.unity.test-framework; AIUnityMCPServer.Editor.TestRunner will load automatically.\"}",
                 "/tests/results"           => GetTestResultsHandler != null ? ExecuteOnMainThread(() => GetTestResultsHandler(body))
                                               : "{\"error\":\"Test Runner is unavailable. Install com.unity.test-framework.\"}",
+                "/uitk/inspect"            => InspectUIToolkit(body),
+                "/uitk/validate"           => ValidateUIToolkit(body),
+                "/uitk/apply"              => ApplyUIToolkit(body),
+                "/uitk/playtest"           => PlaytestUIToolkit(body),
                 _ => $"{{\"error\":\"Unknown command: {path}\"}}"
             };
             _sw.Stop();
@@ -329,7 +347,30 @@ namespace MCPBridge
         }
 
         // ── Ping ────────────────────────────────────────────────────────────
-        static string Ping() => "{\"status\":\"ok\",\"version\":\"1.0\"}";
+        static string Ping() => "{\"status\":\"ok\",\"version\":\"2.0.0\"}";
+
+        static bool UIToolkitRequestRequiresWrite(string path, string body)
+        {
+            if (path == "/uitk/apply")
+                return !HasExplicitJsonString(body, "mode", "plan");
+
+            if (path != "/uitk/playtest")
+                return false;
+
+            if (HasExplicitJsonString(body, "mode", "status"))
+                return false;
+
+            return !(HasExplicitJsonString(body, "mode", "start") &&
+                     HasExplicitJsonString(body, "action", "snapshot"));
+        }
+
+        static bool HasExplicitJsonString(string body, string property, string expectedValue)
+        {
+            if (string.IsNullOrEmpty(body)) return false;
+            string pattern = "\\\"" + System.Text.RegularExpressions.Regex.Escape(property) + "\\\"\\s*:\\s*\\\"([^\\\"]+)\\\"";
+            var match = System.Text.RegularExpressions.Regex.Match(body, pattern);
+            return match.Success && match.Groups[1].Value.Equals(expectedValue, StringComparison.OrdinalIgnoreCase);
+        }
 
         // ── Run C# ──────────────────────────────────────────────────────────
         // Escape hatch: compile + run arbitrary C# against the live Editor/scene via Roslyn

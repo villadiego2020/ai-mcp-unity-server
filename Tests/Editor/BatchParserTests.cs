@@ -1,8 +1,8 @@
 using System.Collections.Generic;
 using NUnit.Framework;
-using MCPBridge;
+using AIUnityMCPServer;
 
-namespace MCPBridge.Tests
+namespace AIUnityMCPServer.Tests
 {
     // Unit tests for the run_batch JSON parsing helpers (MCPHandlers.Edit.cs) — the most logic-heavy
     // part of the Apply/Edit Pack. These also double as the dog-food smoke test for unity_run_tests.

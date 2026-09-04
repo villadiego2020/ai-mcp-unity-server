@@ -5,7 +5,7 @@ using System.Text;
 using UnityEditor;
 using UnityEngine;
 
-namespace MCPBridge
+namespace AIUnityMCPServer
 {
     /// <summary>
     /// </summary>

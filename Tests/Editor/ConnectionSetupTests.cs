@@ -5,7 +5,7 @@ using System.Reflection;
 using NUnit.Framework;
 using UnityEngine;
 
-namespace MCPBridge.Tests
+namespace AIUnityMCPServer.Tests
 {
     public class ConnectionSetupTests
     {
@@ -44,7 +44,7 @@ namespace MCPBridge.Tests
             string json = File.ReadAllText(MCPPackagePaths.CommandManifestPath());
             var manifest = JsonUtility.FromJson<CommandManifest>(json);
             Assert.That(manifest, Is.Not.Null);
-            Assert.That(manifest.commands, Has.Length.EqualTo(69));
+            Assert.That(manifest.commands, Has.Length.EqualTo(73));
 
             var tools = new HashSet<string>(StringComparer.Ordinal);
             var routes = new HashSet<string>(StringComparer.Ordinal);

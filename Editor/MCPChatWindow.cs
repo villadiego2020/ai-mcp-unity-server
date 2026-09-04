@@ -6,7 +6,7 @@ using System.Threading.Tasks;
 using UnityEditor;
 using UnityEngine;
 
-namespace MCPBridge
+namespace AIUnityMCPServer
 {
     public class MCPChatWindow : EditorWindow
     {
@@ -2648,6 +2648,8 @@ namespace MCPBridge
                     {
                         string execResult = await System.Threading.Tasks.Task.Run(() => ExecuteCommand(s, response.CommandJson));
                         string cmdName = ExtractCommandName(response.CommandJson);
+                        if (cmdName == "uitk_playtest")
+                            execResult = await PollUIToolkitPlaytest(execResult, token);
                         bool execErr = execResult.StartsWith("⚠️") || execResult.Contains("\"error\"");
 
                         if (!execErr && _dataCommands.Contains(cmdName))
@@ -2657,14 +2659,19 @@ namespace MCPBridge
 
                             List<ClaudeImage> followImages = null;
                             string fp;
-                            if (cmdName == "capture_screenshot")
+                            if (cmdName == "capture_screenshot" || cmdName == "uitk_playtest")
                             {
                                 string shotPath = ExtractScreenshotPath(execResult);
                                 followImages = BuildScreenshotImages(shotPath);
-                                fp = $"Original user request: {item.RawPrompt}\n\n" +
-                                     (followImages != null
-                                        ? "This is a Unity screenshot. Analyze what is visible and answer the original request using Header(Dev)/Header(Art)."
-                                        : $"The screenshot was captured but could not be loaded ({EscapeForPrompt(execResult)}). Briefly inform the user.");
+                                fp = cmdName == "capture_screenshot"
+                                    ? $"Original user request: {item.RawPrompt}\n\n" +
+                                      (followImages != null
+                                          ? "This is a Unity screenshot. Analyze what is visible and answer the original request using Header(Dev)/Header(Art)."
+                                          : $"The screenshot was captured but could not be loaded ({EscapeForPrompt(execResult)}). Briefly inform the user.")
+                                    : $"Original user request: {item.RawPrompt}\n\n" +
+                                      $"This is the completed UI Toolkit playtest result:\n{execResult}\n\n" +
+                                      (followImages != null ? "Use the attached screenshot as additional visual evidence. " : "") +
+                                      "Summarize the before/after state, findings, console or exception evidence, limitations, and next actions. Do not display raw JSON.";
                             }
                             else
                             {
@@ -2743,8 +2750,29 @@ namespace MCPBridge
             "read_console","read_logfile","capture_state","perf_audit","perf_worst",
             "refactor_audit","audit_textures","audit_unused","audit_empty_folders",
             "memory_snapshot","fusion_stats","get_exceptions","watch_get","read_script",
-            "capture_screenshot",
+            "capture_screenshot","uitk_inspect","uitk_validate","uitk_apply","uitk_playtest",
         };
+
+        static async System.Threading.Tasks.Task<string> PollUIToolkitPlaytest(string initialResult, System.Threading.CancellationToken token)
+        {
+            if (string.IsNullOrEmpty(initialResult) || !initialResult.Contains("\"status\":\"running\""))
+                return initialResult;
+
+            var runMatch = System.Text.RegularExpressions.Regex.Match(initialResult, "\"runId\"\\s*:\\s*\"([^\"]+)\"");
+            if (!runMatch.Success)
+                return initialResult;
+
+            string runId = runMatch.Groups[1].Value;
+            for (int attempt = 0; attempt < 20; attempt++)
+            {
+                await System.Threading.Tasks.Task.Delay(100, token);
+                string body = $"{{\"mode\":\"status\",\"runId\":\"{MCPHandlers.EscapeJsonPublic(runId)}\"}}";
+                string result = await System.Threading.Tasks.Task.Run(() => MCPHandlers.Dispatch("/uitk/playtest", body), token);
+                if (!result.Contains("\"status\":\"running\""))
+                    return "✅ Execute: " + result;
+            }
+            return initialResult + "\nPlaytest is still running. Poll uitk_playtest with mode=status and the returned runId.";
+        }
 
         static int PrefabRelevance(string prefabName, List<string> scripts)
         {

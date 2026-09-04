@@ -1,7 +1,10 @@
 {
-  "name": "MCPBridge.Editor",
+  "name": "AIUnityMCPServer.Editor.TestRunner",
   "rootNamespace": "",
-  "references": [],
+  "references": [
+    "AIUnityMCPServer.Editor",
+    "UnityEditor.TestRunner"
+  ],
   "includePlatforms": ["Editor"],
   "excludePlatforms": [],
   "allowUnsafeCode": false,

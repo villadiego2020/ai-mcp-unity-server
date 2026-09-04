@@ -2,7 +2,10 @@
   "mcpServers": {
     "AIUnityMCPServer": {
       "command": "node",
-      "args": ["./Packages/com.mcpbridge/Server~/index.js"]
+      "args": ["<runtime-cache>/index.js"],
+      "env": {
+        "UNITY_PROJECT_PATH": "<absolute-path-to-unity-project>"
+      }
     }
   }
 }

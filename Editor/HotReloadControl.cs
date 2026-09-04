@@ -2,7 +2,7 @@ using System;
 using System.Reflection;
 using UnityEngine;
 
-namespace MCPBridge
+namespace AIUnityMCPServer
 {
     /// <summary>
     /// </summary>

@@ -6,7 +6,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using UnityEngine;
 
-namespace MCPBridge
+namespace AIUnityMCPServer
 {
     public static class ClaudeAPIClient
     {
@@ -213,6 +213,23 @@ Create and place content:
 {""command"":""place_prefab"",""name"":""P_HumanTrooperSword"",""x"":0,""y"":0,""z"":0}
 {""command"":""create_ui"",""name"":""Name"",""type"":""button|text|image|panel"",""x"":0,""y"":0,""width"":160,""height"":40}
 
+UI Toolkit source workflow:
+{""command"":""uitk_inspect"",""path"":""Assets/UI/Screen.uxml"",""includeLinkedStyles"":true}
+{""command"":""uitk_validate"",""path"":""Assets/UI/Screen.uxml"",""includeLinkedStyles"":true}
+Inspect first and preserve its exact-byte SHA-256 hash. Apply is a two-step optimistic-concurrency workflow. Send an
+explicit mode=plan with one to eight {path,content,expectedHash} changes. Review validation and the deterministic
+planHash, then send the exact same changes with mode=commit and top-level expectedHash set to that planHash. Never
+invent a file hash, reuse a plan after source changes, or describe plan mode as writing files.
+{""command"":""uitk_apply"",""mode"":""plan"",""changes"":[{""path"":""Assets/UI/Screen.uxml"",""content"":""..."",""expectedHash"":""<inspect hash>""}]}
+
+UI Toolkit live verification is bounded and asynchronous. It never enters Play Mode. Start with an exact UIDocument
+name, hierarchy path, or instance ID, then poll status with the returned runId. Snapshot is read-only only when both
+mode=start and action=snapshot are explicit. click, set-text, set-toggle, and focus require Play Mode and Write ON.
+Interactions are semantic programmatic events, not real pointer, keyboard, controller, hover, pressed-state, or
+screen-reader simulation.
+{""command"":""uitk_playtest"",""mode"":""start"",""document"":""UIRoot"",""action"":""snapshot""}
+{""command"":""uitk_playtest"",""mode"":""status"",""runId"":""<run id>""}
+
 Assign a scene object or asset reference:
 {""command"":""assign_reference"",""name"":""Enemy"",""component"":""EnemyAI"",""property"":""target"",""target"":""Player""}
 The target may be a GameObject name or asset name/path. Set asset=true to force asset lookup.
@@ -236,6 +253,8 @@ Useful data commands:
 - console_alert, console_alert_get and console_alert_clear for transient log patterns.
 - run_tests followed by repeated get_test_results calls until status is done.
 - optimize_ui, create_material, create_sprite_atlas, audit_textures, audit_unused and audit_empty_folders.
+- uitk_inspect and uitk_validate for bounded UI Toolkit source evidence; uitk_apply for hash-gated plan/commit edits.
+- uitk_playtest for live UIDocument snapshots and semantic interactions with before/after, console, exception, and screenshot evidence.
 - refactor_audit for size, complexity, coupling, inheritance and technical-debt findings.
 - count_components, capture_state, perf_audit, memory_snapshot, fusion_stats and perf_worst for runtime evidence.
 - watch_add, watch_alert, watch_animator, watch_get and watch_clear for state sampled during Play Mode.

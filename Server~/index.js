@@ -153,12 +153,17 @@ function toZodShape(parameters) {
     let schema;
     switch (parameter.type) {
       case "number": schema = z.number(); break;
+      case "integer": schema = z.number().int(); break;
       case "boolean": schema = z.boolean(); break;
       case "enum": schema = z.enum(parameter.values); break;
       case "number[]": schema = z.array(z.number()); break;
       case "object[]": schema = z.array(z.record(z.any())); break;
       default: schema = z.string();
     }
+    if (Object.prototype.hasOwnProperty.call(parameter, "min")) schema = schema.min(parameter.min);
+    if (Object.prototype.hasOwnProperty.call(parameter, "max")) schema = schema.max(parameter.max);
+    if (Object.prototype.hasOwnProperty.call(parameter, "minItems")) schema = schema.min(parameter.minItems);
+    if (Object.prototype.hasOwnProperty.call(parameter, "maxItems")) schema = schema.max(parameter.maxItems);
     if (parameter.desc) schema = schema.describe(parameter.desc);
     if (Object.prototype.hasOwnProperty.call(parameter, "default")) schema = schema.optional().default(parameter.default);
     else if (parameter.opt) schema = schema.optional();
@@ -276,7 +281,7 @@ async function connectToUnity(target, timeoutSeconds) {
 
 const server = new McpServer({
   name: "AIUnityMCPServer",
-  version: "1.0.0",
+  version: "2.0.0",
 }, {
   instructions: "Use unity_connection_status when connection state is unknown. Use unity_connect for one-call discovery, read-only start, selection, and health verification. If a result has code AMBIGUOUS, never guess: show the candidates and ask for an instanceId, pid, port, or full projectPath. Remote and automatic starts keep Allow Write Commands OFF; only the user should enable writes in Unity.",
 });
@@ -348,19 +353,25 @@ server.tool("unity_start_instance", "Start and select a Unity Editor read-only. 
 const commands = loadCommands();
 for (const command of commands) {
   const options = { timeoutMs: command.timeoutMs, maxRetries: command.noRetry ? 1 : undefined };
-  const isScreenshot = command.command === "capture_screenshot";
   server.tool(command.tool, command.description, toZodShape(command.params), async args => {
     const response = await callUnity(command.path, args || {}, options);
-    if (isScreenshot && response?.screenshot && !response.error) {
+    const screenshotPath = command.command === "capture_screenshot"
+      ? response?.screenshot
+      : command.command === "uitk_playtest" && response?.status === "done"
+        ? response?.evidence?.screenshot
+        : null;
+    if (screenshotPath && !response.error) {
       try {
-        const png = fs.readFileSync(response.screenshot);
-        const metadata = {
-          screenshot: response.screenshot,
-          view: response.view,
-          mode: response.mode,
-          size: response.size,
-          bytes: response.bytes,
-        };
+        const png = fs.readFileSync(screenshotPath);
+        const metadata = command.command === "capture_screenshot"
+          ? {
+              screenshot: response.screenshot,
+              view: response.view,
+              mode: response.mode,
+              size: response.size,
+              bytes: response.bytes,
+            }
+          : response;
         return { content: [
           { type: "text", text: JSON.stringify(metadata, null, 2) },
           { type: "image", data: png.toString("base64"), mimeType: "image/png" },

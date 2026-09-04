@@ -1,7 +1,7 @@
 using NUnit.Framework;
 using UnityEngine;
 
-namespace MCPBridge.Tests
+namespace AIUnityMCPServer.Tests
 {
     public class UnityObjectIdTests
     {

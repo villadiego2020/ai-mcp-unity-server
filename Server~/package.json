@@ -1,7 +1,8 @@
 {
-  "name": "ai-unity-mcp-server",
-  "version": "1.0.0",
-  "description": "AI Unity MCP Server bridge for Unity Editor (com.mcpbridge)",
+  "name": "ai-mcp-unity-server",
+  "version": "2.0.0",
+  "description": "Node transport runtime for AI Unity MCP Server",
+  "private": true,
   "type": "module",
   "main": "index.js",
   "scripts": {

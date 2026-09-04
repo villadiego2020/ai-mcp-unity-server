@@ -6,7 +6,7 @@ using System.Text.RegularExpressions;
 using UnityEditor;
 using UnityEngine;
 
-namespace MCPBridge
+namespace AIUnityMCPServer
 {
     /// <summary>
     /// </summary>

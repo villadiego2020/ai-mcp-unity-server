@@ -2,11 +2,11 @@ using System;
 using System.IO;
 using UnityEditor;
 
-namespace MCPBridge
+namespace AIUnityMCPServer
 {
     internal static class MCPPackagePaths
     {
-        const string AssemblyDefinitionName = "UnityMCP.Editor";
+        const string AssemblyDefinitionName = "AIUnityMCPServer.Editor";
         const string AssemblyDefinitionFileName = AssemblyDefinitionName + ".asmdef";
         static string _packageVersion = "";
 

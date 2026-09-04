@@ -7,7 +7,7 @@ using UnityEngine;
 using UnityEngine.SceneManagement;
 using Debug = UnityEngine.Debug;
 
-namespace MCPBridge
+namespace AIUnityMCPServer
 {
     /// <summary>
     /// </summary>

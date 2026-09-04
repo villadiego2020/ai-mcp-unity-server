@@ -1,0 +1,26 @@
+name: Publish to OpenUPM
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    if: vars.OPENUPM_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Verify exact package tag
+        run: node Tools~/Release/verify-release.mjs --tag "${{ github.ref_name }}"
+      - uses: openupm/openupm-action@v1
+        with:
+          package: com.villadiego.ai-mcp-unity-server
+          tag: ${{ github.ref_name }}

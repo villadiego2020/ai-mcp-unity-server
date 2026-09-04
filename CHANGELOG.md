@@ -1,168 +1,32 @@
 # Changelog
 
-All notable changes to this package are documented here.
+Notable changes are documented here using [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
+and [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [2.0.0] - 2026-09-04
 
-### Fixed
-- Asset Import Workers and batch-mode Unity processes no longer initialize the listener or register a
-  duplicate `Main` presence. The bridge re-runs discovery on every safe retry and tracks the stable
-  instance ID rather than a port that can change after a domain reload.
-- The C# command alias loader now resolves the shared manifest from this package's real
-  `Server~/commands.json` path instead of an extracted-project path.
-- **`.mcp.json` no longer gets stamped with a stale path on every domain reload.**
-  `MCPServer.EnsureMcpJson()` hardcoded a source-project-relative server path and rewrote the file
-  whenever its contents differed, so a config
-  edited by hand was clobbered on the next recompile. It now resolves this package's real location
-  through `UnityEditor.PackageManager.PackageInfo.FindForAssembly` and writes the actual path to
-  `Server~/index.js` — project-relative when the package sits inside the Unity project, absolute for a
-  local `file:` reference. The file is only written when it is missing or when it contains nothing but
-  this package's own entry (which is how a stale path is repaired); **a `.mcp.json` with other MCP
-  servers or extra keys is left untouched**, with one Console warning per session if its
-  `AIUnityMCPServer` entry
-  points at a file that does not exist. Immutable installs (git URL / registry, living in
-  `Library/PackageCache`) are skipped until Setup has bootstrapped a stable per-user runtime cache;
-  the generated file then points at that cache. The write also moved to `EditorApplication.delayCall`, so it no longer runs before the
-  Package Manager and AssetDatabase are ready. Both rules — where the path points and which files may
-  be rewritten — are covered by new EditMode tests in `Tests/Editor/McpJsonPathTests.cs`.
-- **The Node bridge finds the Editor for every documented install method.** `Server~/index.js`
-  derived the Unity project root as *two directories above itself* — true only for the original
-  extracted layout, so instance discovery resolved to `<project>/Packages/`
-  (embedded) or to a folder outside the project entirely (`file:` reference), and `unity_*` tools
-  reported "no Unity instance" unless `UNITY_MCP_PORT` was set by hand. Every Editor now also
-  registers itself in a machine-wide registry at `~/.AIUnityMCPServer/instances/` alongside the
-  per-project `Library/AIUnityMCPServer/instances/`, and the bridge merges both by PID. Discovery logic moved
-  to a new `Server~/registry.js` (importable and testable on its own).
+### Breaking
+
+- Renamed the UPM identity from `com.mcpbridge` to `com.villadiego.ai-mcp-unity-server` and the C# namespace/assembly to `AIUnityMCPServer`. Follow the [2.0 migration guide](Documentation~/migration-2.0.md) and replace the old manifest dependency; do not install both identities together.
 
 ### Added
-- **Self-healing Codex connection flow.** `unity_connection_status` diagnoses discovery without side
-  effects, while `unity_connect` deterministically selects an Editor, starts it read-only when needed,
-  follows port changes and verifies `ping` in one call. Ambiguous cross-project targets now return
-  `AMBIGUOUS` with exact candidates instead of picking the first matching label.
-- **One-click Codex Setup and read-only Doctor.** Unity now registers the bridge with the official
-  `codex mcp` CLI. Git/registry and editable installs atomically bootstrap a content-addressed bridge
-  under the per-user application-data directory, so npm dependencies never modify `PackageCache` and
-  the registered entry survives package path changes. Repeated Setup calls reuse a validated cache;
-  Doctor separates source, bootstrap and dependency failures. Existing custom `AIUnityMCPServer` registrations
-  remain untouched without explicit Repair. Auto Start Read-Only is opt-in and never enables writes.
-- **Versioned Editor presence.** Atomic schema-v2 presence files include a stable project instance ID,
-  process kind, package version and heartbeat so the Node bridge can reject stale or worker entries.
-- **Offline pack** — tools aimed at single-player/offline work (`Editor/MCPHandlers.Offline.cs`,
-  `Editor/ConsoleAlert.cs`):
-  - `read_scriptableobject` / `edit_scriptableobject` (`/asset/so-read`, `/asset/so-edit`) — read and
-    tune serialized values on a ScriptableObject asset (config / balance / game data). Edit is
-    write-gated; primitive value format matches `set_property`.
-  - `raycast` (`/scene/raycast`) — cast a physics ray (direction or target point) and report hits
-    (object, layer, distance, point, normal). Debug combat/targeting.
-  - `overlap` (`/scene/overlap`) — colliders within a sphere (AoE/aggro/pickup).
-  - `navmesh_path` (`/scene/navmesh-path`) — compute a NavMesh path between two points; status +
-    corners + distance. Debug AI that can't reach / gets stuck.
-  - `console_alert` / `console_alert_get` / `console_alert_clear` (`/console/alert*`) — watch the
-    console for messages matching a substring (optionally min severity) and count them + keep the
-    last few; like `watch_alert` but for `Debug.Log`. Catches errors that scroll away during play.
-- **Runtime-inspection tools (Play Mode companions to RuntimeWatch).**
-  - `watch_alert` (`/watch/alert`) — a watch with a condition (`lt`/`lte`/`gt`/`gte`/`eq`/`ne` against a
-    value, or `changed`); on the rising edge it logs a warning and bumps a counter (surfaced in
-    `watch_get` and the panel as 🔔). Catches glitches that flash by — value goes negative, exceeds a
-    cap, changes unexpectedly.
-  - `watch_animator` (`/watch/animator`) — watch an Animator's current state (clip + normalized time,
-    flags transitions) or a parameter value live, via special `@state` / `@param:Name` watch fields.
-  - `event_log` / `event_log_get` / `event_log_clear` (`/event/log*`) — attach a temporary probe
-    (`MCPEventProbe`) to a GameObject to log its `OnCollision`/`OnTrigger` events during Play; probes
-    auto-detach on Stop. Debug "why didn't it hit / hit twice / trigger never fired".
-  - `play_control` gained a `timescale` action (slow-mo) — set `Time.timeScale` (e.g. 0.2) to watch
-    fast events in slow motion while watches keep sampling; `exit` restores normal speed.
-  - The 👁 Watch panel now draws a mini **sparkline** of each numeric watch's history and a 🔔 alert
-    badge with trigger count.
+
+- Added four bounded UI Toolkit tools for inspection, validation, optimistic source updates, and semantic Play Mode checks.
+- Added Unity Pipeline commands `ai_mcp_list_commands` and `ai_mcp_dispatch` so the official Unity CLI/MCP path can use the same dispatcher beside the Node transport.
 
 ### Changed
-- **Instance selection is project-aware.** With several Editors running, the bridge now prefers one
-  belonging to the current project — `UNITY_PROJECT_PATH`, else the Unity project containing the
-  bridge, else the project containing the client's working directory — before falling back to the old
-  `Main`-then-lowest-port rule; ParrelSync clones still share their original project's registry.
-  Presence entries whose process is gone are ignored instead of being dialled and timing out, and
-  `unity_list_instances` reports `projectPath` plus, when the list is empty, every directory searched.
 
-- **RuntimeWatch is much easier to use.**
-  - `watch_add` now only requires `field`. The `component` is auto-detected (the component holding
-    that field, game scripts preferred over `UnityEngine.*`), and `objectName` defaults to the
-    GameObject selected in the Hierarchy. Explicit values still work for precision; nested paths like
-    `Damageable.Hp.Value` are supported.
-  - New **👁 Watch panel** in the chat window (toolbar toggle): live values + trend (↑/↓/=) that
-    refresh while playing, a per-row ✕ to remove, a quick-add field for the selected object, and
-    clear-all — no need to type `watch_get`. Backed by new `RuntimeWatch.Snapshot()` /
-    `RemoveWatch(key)` / `Count` APIs.
+- Setup now creates and reuses a per-user, content-addressed Node runtime cache for immutable Git and registry installs, with multi-Editor discovery and a read-only Doctor.
+- Refreshed package metadata, documentation, license, and release validation for versioned OpenUPM distribution.
 
-- **Chat window reskin — "Midnight Indigo" theme.** Replaced the warm clay/brown palette with a
-  cool charcoal base (`#0F1117`), higher-contrast near-white text (`#EEF0F4`), and an indigo-violet
-  accent (`#7C6CFF`) for a modern, more readable, AI-app look. Centralized the palette (added
-  `ACCENT_2`, `DANGER`, `WARN` constants) and swept all scattered inline colors onto it. Markdown
-  rendering (`MarkdownColor.cs`) recolored to match (code → light indigo, headers → bright indigo).
-  Code syntax highlighting (`CodeHighlight.cs`, VS Code Dark+) left as-is — it already suits the cool
-  base. Bumped body font to 14px and fixed the bundled IBM Plex Sans Thai Looped font to resolve by
-  asset name (`AssetDatabase.FindAssets`) instead of a hardcoded `Assets/...` path, so it actually
-  loads when installed as a UPM package (previously fell back to a system font). Refreshed key UI copy
-  (not-connected notice, input placeholder).
+### Fixed
 
-### Added
-- **Apply/Edit Pack** — 8 tools that let the AI act, not just diagnose (new file
-  `Editor/MCPHandlers.Edit.cs`):
-  - `unity_edit_script` (`/script/edit`) — targeted find/replace on an existing `.cs` file (the
-    fix/refactor primitive; no whole-file rewrite). Write-gated, `noRetry`.
-  - `unity_assign_reference` (`/object/assign-reference`) — assign an object/asset reference into a
-    component's serialized field (what `set_property` can't do). Picks the matching component on the
-    target by field type. Write-gated.
-  - `unity_run_batch` (`/batch`) — run up to 50 commands in one round-trip; each sub-command still
-    passes the write-gate but skips the rate limit (counts as one user action). Write-gated.
-  - `unity_delete_asset` (`/asset/delete`) — move an asset file to the OS trash (recoverable);
-    refuses folders, third-party paths, and anything outside `Assets/`. Write-gated.
-  - `unity_set_import_settings` (`/asset/import-settings`) — apply texture importer changes
-    (maxSize/compression/readable/mipmaps/crunch); the fix that pairs with `audit_textures`.
-    Write-gated.
-  - `unity_capture_screenshot` (`/view/screenshot`) — capture the Game/Scene view to a PNG; the
-    bridge reads it off disk and returns it as an actual **image** block (Claude sees the result, not
-    just a path). The in-Unity chat (F12) also auto-attaches the PNG to a round-2 request so the
-    embedded AI analyzes the image, not the file path. Supports `overlay=true` (Play-only: real
-    backbuffer incl. Screen-Space-Overlay UI), a custom `path`, and `base64` embedding (capped ~3MB).
-    Read-only.
-  - `unity_build_player` (`/build/player`) — build a standalone/mobile player via `BuildPipeline`
-    (blocking; switches active target if needed). Write-gated, long `timeoutMs`, `noRetry`.
-  - `unity_git_status` (`/git/status`) — branch + porcelain working-tree changes before suggesting a
-    commit. Read-only.
-- **Test Runner integration** — `unity_run_tests` (`/tests/run`) + `unity_get_test_results`
-  (`/tests/results`) drive the Unity Test Runner (EditMode/PlayMode, optional name filter). Results
-  are async, so `run_tests` starts a run and `get_test_results` polls until `status:done`; progress is
-  persisted in `SessionState` so it survives the PlayMode domain reload. Lives in a **separate optional
-  assembly** `MCPBridge.Editor.TestRunner` (`Editor/TestRunner/`) that references
-  `UnityEditor.TestRunner`; if `com.unity.test-framework` is absent only that assembly is skipped (the
-  main 54 tools are unaffected) and the routes return a helpful error. The main assembly wires in via
-  nullable `MCPHandlers.RunTestsHandler` / `GetTestResultsHandler` delegates set at load.
-- EditMode tests for the `run_batch` JSON parser and `edit_script` primitives
-  (`Tests/Editor/`, assembly `MCPBridge.Editor.Tests`, gated by `UNITY_INCLUDE_TESTS`). Internal
-  parser helpers are exposed via `InternalsVisibleTo` (`Editor/AssemblyInfo.cs`). To run them in a
-  consuming project, add `"com.mcpbridge"` to `testables` in `Packages/manifest.json`, then open
-  Window → General → Test Runner (or call `unity_run_tests`).
-- `Dispatch` gained a `rateLimited` flag so batch sub-commands bypass the per-second cap.
-- Node bridge `toZodShape` supports an `object[]` param type (for `run_batch`'s `commands` array).
-- `unity_run_csharp` tool (`/code/run`) — escape hatch that compiles and runs arbitrary C# against
-  the live Editor/scene via the existing `RuntimeCompiler` (Roslyn). Lets the AI do anything Unity
-  exposes when no dedicated tool fits (build prefabs from imported models, batch-edit assets, drive
-  the importer, prototype gameplay live). Logic goes in `public static string Run()` or a
-  MonoBehaviour; write-gated.
-- Node bridge supports per-command `timeoutMs` and `noRetry` in `commands.json`. `run_csharp` uses
-  `timeoutMs: 60000, noRetry: true` so a slow Roslyn compile isn't retried (which would re-run side
-  effects).
+- Hardened instance selection, stale-presence handling, write-gate classification, UI Toolkit path checks, and rollback reporting.
 
-## [1.0.0] - 2026-06-28
+## [1.0.0] - 2026-08-07
 
-### Added
-- Initial extraction of AI Unity MCP Server into a standalone, reusable UPM package.
-- Editor assembly `MCPBridge.Editor` (27 scripts) — chat window, MCP server, handlers, profiler
-  readers, code/prefab indexers, refactor audit, runtime watch, exception tracker.
-- Node bridge under `Server~/` for external Claude Code CLI integration.
-- `.mcp.json` template under `Documentation~/`.
+- Initial Unity 6 Editor package with an in-Editor chat, Node MCP transport, scene and asset tools, runtime diagnostics, performance inspection, and opt-in write commands.
+- The original package identity was `com.mcpbridge`; it is retained here only as release history for 2.0 migration.
 
-### Notes
-- No code changes from the source — fully portable as-is (`asmdef` has no external references;
-  paths resolve via `Application.dataPath` at runtime).
-- Fusion network features are reflection-based and inert without Fusion installed.
+[2.0.0]: https://github.com/villadiego2020/ai-mcp-unity-server/compare/v1.0.0...v2.0.0
+[1.0.0]: https://github.com/villadiego2020/ai-mcp-unity-server/releases/tag/v1.0.0

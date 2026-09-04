@@ -5,7 +5,7 @@ using UnityEditor;
 using UnityEngine;
 using UnityEngine.AI;
 
-namespace MCPBridge
+namespace AIUnityMCPServer
 {
     public static partial class MCPHandlers
     {

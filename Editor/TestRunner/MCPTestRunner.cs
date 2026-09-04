@@ -4,13 +4,13 @@ using UnityEditor;
 using UnityEditor.TestTools.TestRunner.Api;
 using UnityEngine;
 
-namespace MCPBridge
+namespace AIUnityMCPServer
 {
     // run_tests / get_test_results — drive the Unity Test Runner from the MCP.
     //
-    // ⚠️ ASMDEF ISOLATION: this lives in its OWN assembly (MCPBridge.Editor.TestRunner) that references
+    // ⚠️ ASMDEF ISOLATION: this lives in its OWN assembly (AIUnityMCPServer.Editor.TestRunner) that references
     //   UnityEditor.TestRunner. If com.unity.test-framework is NOT installed, only THIS assembly fails to
-    //   load (a console warning) — the main MCPBridge.Editor (all other tools) is untouched. The main
+    //   load (a console warning) — the main AIUnityMCPServer.Editor (all other tools) is untouched. The main
     //   assembly never references this one; we wire in via delegates set on MCPHandlers at load time.
     //
     // Results arrive asynchronously over many frames (and PlayMode tests trigger a domain reload), so we

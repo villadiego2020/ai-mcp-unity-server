@@ -233,6 +233,35 @@
       "mode": { "type": "enum", "values": ["edit","play"], "opt": true, "default": "edit", "desc": "EditMode (fast, no play) or PlayMode (enters play, slower)" },
       "filter": { "type": "string", "opt": true, "desc": "Optional test-name regex (groupNames) to run a subset, e.g. 'MyNamespace.Combat.*'" }
     } },
-    { "tool": "unity_get_test_results", "command": "get_test_results", "path": "/tests/results", "description": "Poll the latest Unity Test Runner results: status (idle/running/done), pass/fail/skip/total counts, and the list of failed tests with messages. Call repeatedly after unity_run_tests until status='done'. Read-only.", "params": {} }
+    { "tool": "unity_get_test_results", "command": "get_test_results", "path": "/tests/results", "description": "Poll the latest Unity Test Runner results: status (idle/running/done), pass/fail/skip/total counts, and the list of failed tests with messages. Call repeatedly after unity_run_tests until status='done'. Read-only.", "params": {} },
+    { "tool": "unity_uitk_inspect", "command": "uitk_inspect", "path": "/uitk/inspect", "description": "Inspect bounded UI Toolkit UXML or USS source under Assets/. Returns exact-byte SHA-256, a flat UXML node model, linked styles, selectors, bindings, truncation metadata, and explicit source-mode limits. Read-only.", "params": {
+      "path": { "type": "string", "desc": "Canonical Assets/... path to a .uxml or .uss file" },
+      "includeLinkedStyles": { "type": "boolean", "opt": true, "default": false, "desc": "Parse linked USS sources when inspecting UXML" },
+      "maxNodes": { "type": "integer", "opt": true, "default": 250, "min": 1, "max": 2000, "desc": "Maximum UXML nodes returned" },
+      "maxDepth": { "type": "integer", "opt": true, "default": 20, "min": 1, "max": 100, "desc": "Maximum UXML depth returned" },
+      "maxSelectors": { "type": "integer", "opt": true, "default": 300, "min": 1, "max": 2000, "desc": "Maximum USS selectors returned" }
+    } },
+    { "tool": "unity_uitk_validate", "command": "uitk_validate", "path": "/uitk/validate", "description": "Validate bounded UI Toolkit UXML or USS source under Assets/. Uses DTD-prohibited XML parsing, basic USS syntax checks, reference/name/selector/binding/accessibility/layout heuristics, and reports source-analysis limits. Read-only.", "params": {
+      "path": { "type": "string", "desc": "Canonical Assets/... path to a .uxml or .uss file" },
+      "includeLinkedStyles": { "type": "boolean", "opt": true, "default": true, "desc": "Validate linked USS sources when the target is UXML" },
+      "maxIssues": { "type": "integer", "opt": true, "default": 100, "min": 1, "max": 500, "desc": "Maximum sorted findings returned" }
+    } },
+    { "tool": "unity_uitk_apply", "command": "uitk_apply", "path": "/uitk/apply", "noRetry": true, "description": "Plan or commit up to eight optimistic-concurrency UI Toolkit source changes. mode=plan is read-only and returns a deterministic planHash. mode=commit requires Write ON, the same changes, matching per-file expectedHash values, and top-level expectedHash=planHash. Commit uses adjacent temp and backup files with verification and rollback; it does not claim filesystem-wide atomicity.", "params": {
+      "mode": { "type": "enum", "values": ["plan","commit"], "opt": true, "default": "plan", "desc": "Use explicit plan for read-only preview or commit for mutation" },
+      "changes": { "type": "object[]", "minItems": 1, "maxItems": 8, "desc": "Objects shaped {path,content,expectedHash}. expectedHash is the inspect hash, or 'missing' for a new file." },
+      "expectedHash": { "type": "string", "opt": true, "desc": "Commit only: planHash returned by mode=plan for the exact unchanged request" },
+      "maxIssues": { "type": "integer", "opt": true, "default": 100, "min": 1, "max": 500, "desc": "Maximum pre-commit validation findings" }
+    } },
+    { "tool": "unity_uitk_playtest", "command": "uitk_playtest", "path": "/uitk/playtest", "noRetry": true, "description": "Run a bounded asynchronous semantic UI Toolkit playtest against a live UIDocument. Snapshot and status are read-only. click, set-text, set-toggle, and focus require Play Mode and Write ON. Does not enter Play Mode and does not simulate real operating-system input.", "params": {
+      "mode": { "type": "enum", "values": ["start","status"], "desc": "Start a run or poll an existing run" },
+      "document": { "type": "string", "opt": true, "desc": "Start only: exact UIDocument hierarchy path, GameObject name, or instance ID" },
+      "runId": { "type": "string", "opt": true, "desc": "Status only: runId returned by start" },
+      "action": { "type": "enum", "values": ["snapshot","click","set-text","set-toggle","focus"], "opt": true, "default": "snapshot", "desc": "Semantic action; send action=snapshot explicitly for a read-only start" },
+      "selector": { "type": "string", "opt": true, "desc": "Exact #name, .class, or type selector; required for interactions" },
+      "value": { "type": "string", "opt": true, "desc": "Value for set-text, or true/false for set-toggle" },
+      "waitFrames": { "type": "integer", "opt": true, "default": 2, "min": 1, "max": 10, "desc": "Frames to wait before snapshot or interaction" },
+      "screenshot": { "type": "boolean", "opt": true, "default": true, "desc": "Attach a Play Mode screenshot when the run completes" },
+      "maxNodes": { "type": "integer", "opt": true, "default": 250, "min": 1, "max": 1000, "desc": "Maximum live visual-tree nodes in before/after state" }
+    } }
   ]
 }

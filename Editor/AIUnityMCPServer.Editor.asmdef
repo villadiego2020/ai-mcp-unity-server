@@ -1,9 +1,9 @@
 {
-  "name": "MCPBridge.Editor.TestRunner",
+  "name": "AIUnityMCPServer.Editor",
   "rootNamespace": "",
   "references": [
-    "MCPBridge.Editor",
-    "UnityEditor.TestRunner"
+    "Unity.Pipeline",
+    "Unity.Nuget.Newtonsoft-Json"
   ],
   "includePlatforms": ["Editor"],
   "excludePlatforms": [],

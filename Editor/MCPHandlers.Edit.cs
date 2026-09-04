@@ -7,7 +7,7 @@ using System.Text;
 using UnityEditor;
 using UnityEngine;
 
-namespace MCPBridge
+namespace AIUnityMCPServer
 {
     //   capture_screenshot, build_player, git_status
     public static partial class MCPHandlers

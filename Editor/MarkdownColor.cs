@@ -1,6 +1,6 @@
 using System.Text.RegularExpressions;
 
-namespace MCPBridge
+namespace AIUnityMCPServer
 {
     /// <summary>
     /// </summary>

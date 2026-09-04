@@ -8,7 +8,7 @@ using System.Threading;
 using UnityEditor;
 using UnityEngine;
 
-namespace MCPBridge
+namespace AIUnityMCPServer
 {
     [InitializeOnLoad]
     public static class MCPServer

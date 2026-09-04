@@ -5,7 +5,7 @@ using System.Text;
 using UnityEngine;
 using Debug = UnityEngine.Debug;
 
-namespace MCPBridge
+namespace AIUnityMCPServer
 {
     internal static class MCPRuntimeCache
     {

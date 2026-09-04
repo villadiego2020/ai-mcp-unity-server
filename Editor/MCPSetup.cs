@@ -7,7 +7,7 @@ using UnityEditor;
 using UnityEngine;
 using Debug = UnityEngine.Debug;
 
-namespace MCPBridge
+namespace AIUnityMCPServer
 {
     internal static class MCPSetup
     {
