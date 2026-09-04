@@ -1,6 +1,6 @@
 {
   "name": "com.villadiego.ai-mcp-unity-server",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "displayName": "AI Unity MCP Server",
   "description": "Editor-only AI and Model Context Protocol tools for inspecting, testing, and safely changing Unity 6 projects.",
   "unity": "6000.0",

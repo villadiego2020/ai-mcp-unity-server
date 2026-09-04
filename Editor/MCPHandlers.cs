@@ -347,7 +347,7 @@ namespace AIUnityMCPServer
         }
 
         // ── Ping ────────────────────────────────────────────────────────────
-        static string Ping() => "{\"status\":\"ok\",\"version\":\"2.0.0\"}";
+        static string Ping() => "{\"status\":\"ok\",\"version\":\"2.0.1\"}";
 
         static bool UIToolkitRequestRequiresWrite(string path, string body)
         {

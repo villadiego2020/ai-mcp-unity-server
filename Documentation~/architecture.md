@@ -64,9 +64,9 @@ Codex registration, and Editor availability.
   before manual retry.
 - The Pipeline adapter adds no cancellation or deduplication protocol. The same timeout rule applies.
 
-## Verification status for 2.0.0
+## Verification status for 2.0.1
 
-- Node integration and contract suite: 17/17 passing.
+- Node integration and contract suite: 23/23 passing.
 - Manifest-to-dispatch parity: all 73 routes checked.
 - Static production/test compilation: Unity 6000.0.75f1 with `com.unity.pipeline` 0.6.0-exp.1.
 - Live Pipeline discovery: not verified because the local Package Manager aborted with
@@ -76,6 +76,9 @@ The Node and Pipeline paths therefore remain side-by-side. Exact project-path ta
 for multi-Editor use.
 
 ## Contributor checks
+
+Every published change must increment the package version and add a dated release section to
+`CHANGELOG.md`. Do not accumulate changes under an `Unreleased` section.
 
 Install Node dependencies without scripts, run Node tests, then run the release verifier:
 

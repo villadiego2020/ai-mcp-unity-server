@@ -35,6 +35,7 @@ function verifyManifest() {
   const root = readJson("package.json");
   const server = readJson("Server~/package.json");
   const lock = readJson("Server~/package-lock.json");
+  const changelog = fs.readFileSync(path.join(packageRoot, "CHANGELOG.md"), "utf8");
 
   assert.match(root.name, /^[a-z0-9]+(?:[.-][a-z0-9-]+){2,}$/);
   assert.equal(root.name, expectedName);
@@ -70,6 +71,9 @@ function verifyManifest() {
   ]);
   assert.equal(root.dependencies["com.unity.pipeline"], "0.6.0-exp.1");
   assert.equal(fs.readFileSync(path.join(packageRoot, "LICENSE.md"), "utf8").includes("Copyright (c) 2026 villadiego2020"), true);
+  assert.doesNotMatch(changelog, /^## \[Unreleased\]/m, "changelog must publish changes under a versioned release");
+  const escapedVersion = root.version.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  assert.match(changelog, new RegExp(`^## \\[${escapedVersion}\\] - \\d{4}-\\d{2}-\\d{2}$`, "m"), "changelog must include the package version and release date");
 
   const requestedTag = process.argv.includes("--tag")
     ? process.argv[process.argv.indexOf("--tag") + 1]
@@ -164,4 +168,4 @@ verifyCanonicalText();
 verifyDocumentationLinks();
 verifyToolContract();
 verifyTarball();
-console.log("Release verification passed for com.villadiego.ai-mcp-unity-server@2.0.0.");
+console.log("Release verification passed for com.villadiego.ai-mcp-unity-server@2.0.1.");
