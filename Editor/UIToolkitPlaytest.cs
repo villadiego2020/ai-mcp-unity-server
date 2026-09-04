@@ -179,7 +179,7 @@ namespace AIUnityMCPServer
                 RunId = runId,
                 CreatedUtc = DateTime.UtcNow,
                 ExpiresUtc = DateTime.UtcNow + RunLifetime,
-                DocumentInstanceId = document.GetInstanceID(),
+                DocumentInstanceId = ReadObjectIdentity(document),
                 DocumentPath = documentPath,
                 Action = action,
                 Selector = request.selector ?? string.Empty,
@@ -413,12 +413,12 @@ namespace AIUnityMCPServer
             UIDocument[] documents = Resources.FindObjectsOfTypeAll<UIDocument>()
                 .Where(item => item != null && !EditorUtility.IsPersistent(item))
                 .OrderBy(item => HierarchyPath(item.transform), StringComparer.Ordinal)
-                .ThenBy(item => item.GetInstanceID())
+                .ThenBy(ReadObjectIdentity)
                 .ToArray();
             var matches = new List<UIDocument>();
             foreach (UIDocument candidate in documents)
             {
-                bool idMatch = int.TryParse(identifier, out int instanceId) && candidate.GetInstanceID() == instanceId;
+                bool idMatch = int.TryParse(identifier, out int instanceId) && ReadObjectIdentity(candidate) == instanceId;
                 bool nameMatch = candidate.gameObject.name.Equals(identifier, StringComparison.Ordinal);
                 bool pathMatch = HierarchyPath(candidate.transform).Equals(identifier, StringComparison.Ordinal);
                 if (idMatch || nameMatch || pathMatch)
@@ -435,14 +435,23 @@ namespace AIUnityMCPServer
                 candidates = documents;
             else
                 candidates = matches;
-            details = string.Join(" | ", candidates.Take(20).Select(item => $"{HierarchyPath(item.transform)} (instanceId {item.GetInstanceID()})"));
+            details = string.Join(" | ", candidates.Take(20).Select(item => $"{HierarchyPath(item.transform)} (instanceId {ReadObjectIdentity(item)})"));
             return false;
         }
 
         static UIDocument FindDocumentByInstanceId(int instanceId)
         {
             return Resources.FindObjectsOfTypeAll<UIDocument>()
-                .FirstOrDefault(item => item != null && !EditorUtility.IsPersistent(item) && item.GetInstanceID() == instanceId);
+                .FirstOrDefault(item => item != null && !EditorUtility.IsPersistent(item) && ReadObjectIdentity(item) == instanceId);
+        }
+
+        static int ReadObjectIdentity(UnityEngine.Object target)
+        {
+#if UNITY_6000_5_OR_NEWER
+            return unchecked((int)EntityId.ToULong(target.GetEntityId()));
+#else
+            return target.GetInstanceID();
+#endif
         }
 
         static bool TryResolveElement(

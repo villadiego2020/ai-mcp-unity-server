@@ -3,6 +3,12 @@
 Notable changes are documented here using [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- Restored UI Toolkit playtest compilation on Unity 6000.5 and newer by using the supported object identity API.
+
 ## [2.0.0] - 2026-09-04
 
 ### Breaking

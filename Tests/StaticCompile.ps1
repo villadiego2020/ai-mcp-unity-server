@@ -2,11 +2,13 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$UnityProject,
 
-    [string]$PipelinePackage
+    [string]$PipelinePackage,
+
+    [string]$EditorProjectFile
 )
 
 $ErrorActionPreference = "Stop"
-$projectFile = Join-Path $UnityProject "AIUnityMCPServer.Editor.csproj"
+$projectFile = if ($EditorProjectFile) { $EditorProjectFile } else { Join-Path $UnityProject "AIUnityMCPServer.Editor.csproj" }
 if (-not (Test-Path -LiteralPath $projectFile)) {
     throw "AIUnityMCPServer.Editor.csproj was not found under '$UnityProject'. Open the project in Unity once to generate it."
 }
@@ -25,11 +27,25 @@ $mono = Join-Path $dataRoot "MonoBleedingEdge\bin\mono.exe"
 $compiler = Join-Path $dataRoot "MonoBleedingEdge\lib\mono\msbuild\Current\bin\Roslyn\csc.exe"
 $output = Join-Path ([IO.Path]::GetTempPath()) "AIUnityMCPServer.StaticTests.dll"
 
+$unityVersionNode = $project.SelectSingleNode("//UnityVersion")
+$unityVersion = if ($unityVersionNode) { [string]$unityVersionNode.InnerText } else { string.Empty }
+$compileDefines = @("UNITY_EDITOR", "UNITY_INCLUDE_TESTS")
+if ($unityVersion -match '^(\d+)\.(\d+)\.') {
+    $unityMajor = [int]$Matches[1]
+    $unityMinor = [int]$Matches[2]
+    if ($unityMajor -ge 6000) {
+        foreach ($minor in 0..$unityMinor) {
+            $compileDefines += "UNITY_6000_${minor}_OR_NEWER"
+        }
+    }
+}
+Write-Output "Static compile Unity version $unityVersion with defines $($compileDefines -join ', ')."
+
 $arguments = @(
     "/nologo"
     "/target:library"
     "/langversion:preview"
-    "/define:UNITY_EDITOR,UNITY_INCLUDE_TESTS"
+    "/define:$($compileDefines -join ';')"
     "/out:`"$output`""
 )
 foreach ($hintPath in $project.Project.ItemGroup.Reference.HintPath | Where-Object { $_ }) {

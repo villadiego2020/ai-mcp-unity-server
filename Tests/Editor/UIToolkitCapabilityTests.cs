@@ -247,6 +247,29 @@ namespace AIUnityMCPServer.Tests
             AssertSelector(root, "#node-10", true, null);
         }
 
+        [Test]
+        public void PlaytestDocumentIdentityUsesTheSupportedUnityApiAndRoundTripsThroughPublicResolution()
+        {
+            var gameObject = new GameObject("IdentityDocument");
+            try
+            {
+                UIDocument document = gameObject.AddComponent<UIDocument>();
+#if UNITY_6000_5_OR_NEWER
+                int identity = unchecked((int)EntityId.ToULong(document.GetEntityId()));
+#else
+                int identity = document.GetInstanceID();
+#endif
+                string response = MCPHandlers.Dispatch("/uitk/playtest",
+                    "{\"mode\":\"start\",\"document\":\"" + identity + "\",\"action\":\"snapshot\"}", false);
+                StringAssert.DoesNotContain("NOT_FOUND", response);
+                Assert.That(response.Contains("DOCUMENT_NOT_READY") || response.Contains("\"status\":\"running\""), Is.True, response);
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(gameObject);
+            }
+        }
+
         void AssertSelector(VisualElement root, string selector, bool expected, string expectedCode)
         {
             MethodInfo method = typeof(UIToolkitPlaytest).GetMethod("TryResolveElement", BindingFlags.NonPublic | BindingFlags.Static);
