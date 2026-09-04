@@ -509,7 +509,7 @@ namespace MCPBridge
 
                 go.transform.localPosition = new Vector3(data.x, data.y, data.z);
                 Undo.RegisterCreatedObjectUndo(go, $"MCP Create {go.name}");
-                return $"{{\"created\":\"{EscapeJson(go.name)}\",\"instanceId\":{go.GetInstanceID()}}}";
+                return $"{{\"created\":\"{EscapeJson(go.name)}\",\"instanceId\":{GetResponseInstanceId(go)}}}";
             });
         }
 
@@ -567,8 +567,18 @@ namespace MCPBridge
                 var instance = (GameObject)PrefabUtility.InstantiatePrefab(prefabAsset);
                 instance.transform.position = new Vector3(data.x, data.y, data.z);
                 Undo.RegisterCreatedObjectUndo(instance, $"MCP Place {instance.name}");
-                return $"{{\"placed\":\"{EscapeJson(instance.name)}\",\"path\":\"{EscapeJson(prefabPath)}\",\"instanceId\":{instance.GetInstanceID()}}}";
+                return $"{{\"placed\":\"{EscapeJson(instance.name)}\",\"path\":\"{EscapeJson(prefabPath)}\",\"instanceId\":{GetResponseInstanceId(instance)}}}";
             });
+        }
+
+        internal static string GetResponseInstanceId(UnityEngine.Object target)
+        {
+#if UNITY_6000_5_OR_NEWER
+            ulong entityId = EntityId.ToULong(target.GetEntityId());
+            return entityId.ToString(System.Globalization.CultureInfo.InvariantCulture);
+#else
+            return target.GetInstanceID().ToString(System.Globalization.CultureInfo.InvariantCulture);
+#endif
         }
 
         // ── Create Terrain — สร้าง Terrain ใหม่ + gen เนินด้วย Perlin ─────────
