@@ -571,16 +571,6 @@ namespace MCPBridge
             });
         }
 
-        internal static string GetResponseInstanceId(UnityEngine.Object target)
-        {
-#if UNITY_6000_5_OR_NEWER
-            ulong entityId = EntityId.ToULong(target.GetEntityId());
-            return entityId.ToString(System.Globalization.CultureInfo.InvariantCulture);
-#else
-            return target.GetInstanceID().ToString(System.Globalization.CultureInfo.InvariantCulture);
-#endif
-        }
-
         // ── Create Terrain — สร้าง Terrain ใหม่ + gen เนินด้วย Perlin ─────────
         static string CreateTerrain(string body)
         {
@@ -1238,6 +1228,25 @@ public class {className} : MonoBehaviour
 
         // public alias — ใช้จาก class อื่นใน namespace เดียวกัน (เช่น RefactorAudit)
         public static string EscapeJsonPublic(string s) => EscapeJson(s);
+
+        // instanceId ที่ส่งกลับใน JSON — บังคับ InvariantCulture กัน culture ที่ใช้เครื่องหมายลบ
+        // คนละตัว (เช่น U+2212) ทำให้ JSON พัง เพราะ id ของ object ใน scene เป็นค่าติดลบ
+        internal static string GetResponseInstanceId(UnityEngine.Object target) =>
+            ReadInstanceId(target).ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+        // Unity 6.4 deprecate GetInstanceID() (กลายเป็น error CS0619 ตั้งแต่ 6.5) ให้ไปใช้
+        // EntityId แบบ 64-bit แทน แต่ไม่มี API แปลง EntityId → int ที่ไม่ obsolete สักตัว
+        // (ตัว implicit operator int ก็ถูกมาร์ค error เหมือนกัน) — จึงตัด 32 bit ล่างจาก
+        // ToULong() เอง ซึ่งให้ผลเท่ากับ operator เดิมเป๊ะ ๆ (0x07E25105FFFFB1E0 → -20000)
+        // ค่าที่ client เห็นจึงเหมือนเดิมทุกเวอร์ชัน
+        static int ReadInstanceId(UnityEngine.Object target)
+        {
+#if UNITY_6000_4_OR_NEWER
+            return unchecked((int)EntityId.ToULong(target.GetEntityId()));
+#else
+            return target.GetInstanceID();
+#endif
+        }
 
         // parse JSON เป็น request object แบบ thread-safe (ไม่ใช้ JsonUtility ที่ต้อง main thread)
         // รองรับ field: string, int, float, bool, float[] — พอสำหรับ request ทุกตัว
