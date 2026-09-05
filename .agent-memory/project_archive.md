@@ -1,6 +1,6 @@
 # BUGS
 
-(ยังไม่มี)
+- [CMM-009 Harden presence heartbeat and clarify MCP activity logging](archive/CMM-009.md) — Transient Windows presence writes now retry with bounded delay, repeated warnings are throttled, and the inbound view clearly separates custom TCP from official Named Pipe traffic; 26 Node tests and Unity 6 static compilation passed. Watch: live antivirus-lock timing and visual repaint remain environment-dependent.
 
 # IMPROVE / OPTIMIZE
 
@@ -17,4 +17,4 @@
 
 # ANALYSIS
 
-(ยังไม่มี)
+(None)
