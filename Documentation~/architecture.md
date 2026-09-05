@@ -64,7 +64,7 @@ Codex registration, and Editor availability.
   before manual retry.
 - The Pipeline adapter adds no cancellation or deduplication protocol. The same timeout rule applies.
 
-## Verification status for 2.0.1
+## Verification status for 2.0.2
 
 - Node integration and contract suite: 23/23 passing.
 - Manifest-to-dispatch parity: all 73 routes checked.

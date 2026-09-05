@@ -145,6 +145,14 @@ namespace AIUnityMCPServer
 
         public static readonly List<MCPLogEntry> Log = new List<MCPLogEntry>();
         const int LOG_MAX = 500;
+        static long _logRevision;
+
+        public static int LogCount
+        {
+            get { lock (Log) { return Log.Count; } }
+        }
+
+        public static long LogRevision => System.Threading.Interlocked.Read(ref _logRevision);
 
         static string LogFilePath()
         {
@@ -177,6 +185,7 @@ namespace AIUnityMCPServer
                 var wrap = JsonUtility.FromJson<MCPLogWrap>(System.IO.File.ReadAllText(p));
                 if (wrap?.items == null) return;
                 lock (Log) { Log.Clear(); Log.AddRange(wrap.items); }
+                System.Threading.Interlocked.Increment(ref _logRevision);
             }
             catch (Exception exception)
             {
@@ -187,6 +196,7 @@ namespace AIUnityMCPServer
         public static void ClearLog()
         {
             lock (Log) { Log.Clear(); }
+            System.Threading.Interlocked.Increment(ref _logRevision);
             SaveLog();
         }
 
@@ -209,6 +219,7 @@ namespace AIUnityMCPServer
                 while (Log.Count > LOG_MAX) Log.RemoveAt(0);
                 _logSinceLastSave++;
             }
+            System.Threading.Interlocked.Increment(ref _logRevision);
             if (_logSinceLastSave >= 10) { _logSinceLastSave = 0; SaveLog(); }
         }
 
@@ -347,7 +358,7 @@ namespace AIUnityMCPServer
         }
 
         // ── Ping ────────────────────────────────────────────────────────────
-        static string Ping() => "{\"status\":\"ok\",\"version\":\"2.0.1\"}";
+        static string Ping() => "{\"status\":\"ok\",\"version\":\"2.0.2\"}";
 
         static bool UIToolkitRequestRequiresWrite(string path, string body)
         {

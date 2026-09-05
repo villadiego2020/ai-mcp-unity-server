@@ -281,7 +281,7 @@ async function connectToUnity(target, timeoutSeconds) {
 
 const server = new McpServer({
   name: "AIUnityMCPServer",
-  version: "2.0.1",
+  version: "2.0.2",
 }, {
   instructions: "Use unity_connection_status when connection state is unknown. Use unity_connect for one-call discovery, read-only start, selection, and health verification. If a result has code AMBIGUOUS, never guess: show the candidates and ask for an instanceId, pid, port, or full projectPath. Remote and automatic starts keep Allow Write Commands OFF; only the user should enable writes in Unity.",
 });

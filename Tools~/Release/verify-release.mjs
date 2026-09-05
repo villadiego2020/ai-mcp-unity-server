@@ -168,4 +168,4 @@ verifyCanonicalText();
 verifyDocumentationLinks();
 verifyToolContract();
 verifyTarball();
-console.log("Release verification passed for com.villadiego.ai-mcp-unity-server@2.0.1.");
+console.log("Release verification passed for com.villadiego.ai-mcp-unity-server@2.0.2.");

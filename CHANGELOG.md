@@ -3,6 +3,13 @@
 Notable changes are documented here using [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and [Semantic Versioning](https://semver.org/).
 
+## [2.0.2] - 2026-09-05
+
+### Fixed
+
+- Retried transient Windows presence-file replacement failures and limited repeated warnings.
+- Refreshed the inbound command view automatically and clarified that official Unity MCP traffic uses a separate transport.
+
 ## [2.0.1] - 2026-09-05
 
 ### Fixed
@@ -34,6 +41,7 @@ and [Semantic Versioning](https://semver.org/).
 - Initial Unity 6 Editor package with an in-Editor chat, Node MCP transport, scene and asset tools, runtime diagnostics, performance inspection, and opt-in write commands.
 - The original package identity was `com.mcpbridge`; it is retained here only as release history for 2.0 migration.
 
+[2.0.2]: https://github.com/villadiego2020/ai-mcp-unity-server/compare/v2.0.1...v2.0.2
 [2.0.1]: https://github.com/villadiego2020/ai-mcp-unity-server/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/villadiego2020/ai-mcp-unity-server/compare/v1.0.0...v2.0.0
 [1.0.0]: https://github.com/villadiego2020/ai-mcp-unity-server/releases/tag/v1.0.0

@@ -1,7 +1,7 @@
 # AI Unity MCP Server
 
 ![Unity 6000.0+](https://img.shields.io/badge/Unity-6000.0%2B-222222)
-![Version 2.0.1](https://img.shields.io/badge/version-2.0.1-2d6cdf)
+![Version 2.0.2](https://img.shields.io/badge/version-2.0.2-2d6cdf)
 ![73 Editor tools](https://img.shields.io/badge/tools-73-2d6cdf)
 ![MIT](https://img.shields.io/badge/license-MIT-green)
 
@@ -18,7 +18,7 @@ explicit write gate; the package is Editor-only and is not included in player bu
 
 Photon Fusion tools activate when Fusion is installed and otherwise return an availability message.
 
-## Install version 2.0.1
+## Install version 2.0.2
 
 Open `Packages/manifest.json`, add the OpenUPM registry, and pin the package version:
 
@@ -32,16 +32,16 @@ Open `Packages/manifest.json`, add the OpenUPM registry, and pin the package ver
     }
   ],
   "dependencies": {
-    "com.villadiego.ai-mcp-unity-server": "2.0.1"
+    "com.villadiego.ai-mcp-unity-server": "2.0.2"
   }
 }
 ```
 
-OpenUPM installation becomes available after the package metadata is accepted and a `v2.0.1` tag is
+OpenUPM installation becomes available after the package metadata is accepted and a `v2.0.2` tag is
 published. The same published version can be pinned directly to its immutable Git tag:
 
 ```json
-"com.villadiego.ai-mcp-unity-server": "https://github.com/villadiego2020/ai-mcp-unity-server.git#v2.0.1"
+"com.villadiego.ai-mcp-unity-server": "https://github.com/villadiego2020/ai-mcp-unity-server.git#v2.0.2"
 ```
 
 For local package development, use Unity Package Manager's **Add package from disk** and select this
@@ -101,7 +101,7 @@ is described in [UI Toolkit tools](Documentation~/ui-toolkit.md), and Play Mode 
 
 ## Unity CLI and official Unity MCP coexistence
 
-Version 2.0.1 includes a thin Unity Pipeline adapter. `ai_mcp_list_commands` exposes the current
+Version 2.0.2 includes a thin Unity Pipeline adapter. `ai_mcp_list_commands` exposes the current
 dispatcher routes and write state; `ai_mcp_dispatch` forwards one command and JSON body through
 `MCPHandlers.Dispatch`, including the same rate limit and write gate. It does not duplicate handlers
 or replace the Node transport.
@@ -133,6 +133,9 @@ See [architecture](Documentation~/architecture.md) for the request paths and int
   MCP server entries.
 - **Pipeline command discovery fails:** verify the exact Unity project path and installed Pipeline
   version; the Node transport remains available independently.
+- **The inbound activity view is empty:** it shows only commands received by AI Unity MCP Server's
+  loopback TCP port. Official Unity MCP uses a separate Named Pipe transport and reports activity in
+  its own client.
 
 ## Documentation
 

@@ -201,7 +201,29 @@ namespace AIUnityMCPServer
 
         void OnDisable() { SaveHistory(_api); SaveHistory(_cli); }
 
-        void OnInspectorUpdate() { if (CpuDeepCapture.IsCapturing) Repaint(); }
+        long _displayedMcpLogRevision = -1;
+        bool _displayedMcpServerState;
+
+        void OnInspectorUpdate()
+        {
+            bool shouldRepaint = CpuDeepCapture.IsCapturing;
+            if (_activeTab == 2)
+            {
+                long logRevision = MCPHandlers.LogRevision;
+                bool serverState = MCPServer.IsRunning;
+                if (logRevision != _displayedMcpLogRevision || serverState != _displayedMcpServerState)
+                {
+                    _displayedMcpLogRevision = logRevision;
+                    _displayedMcpServerState = serverState;
+                    shouldRepaint = true;
+                }
+            }
+
+            if (shouldRepaint)
+            {
+                Repaint();
+            }
+        }
 
         static int CurrentBackend() => EditorPrefs.GetInt("AIUnityMCPServer_Backend", 0);
 
@@ -330,7 +352,7 @@ namespace AIUnityMCPServer
         {
             int backend = CurrentBackend();
 
-            int logCount = MCPHandlers.Log.Count;
+            int logCount = MCPHandlers.LogCount;
             bool srvOn = MCPServer.IsRunning;
             string srvDot = srvOn ? "● " : "○ ";
             var labels = new[] {
@@ -462,6 +484,8 @@ namespace AIUnityMCPServer
         void DrawMcpLog()
         {
             var log = MCPHandlers.Log;
+            List<MCPHandlers.MCPLogEntry> snapshot;
+            lock (log) { snapshot = new List<MCPHandlers.MCPLogEntry>(log); }
             bool srvOn = MCPServer.IsRunning;
 
             // ── Server control bar ──
@@ -493,22 +517,38 @@ namespace AIUnityMCPServer
 
             // quick stats
             int errCount = 0;
-            lock (log) foreach (var e in log) if (e.IsError) errCount++;
+            foreach (var entry in snapshot) if (entry.IsError) errCount++;
             var statStyle = new GUIStyle(EditorStyles.miniLabel) { fontSize = FONT_SIZE - 2 };
             statStyle.normal.textColor = TEXT_HINT;
-            GUILayout.Label($"{log.Count} cmds  {errCount} err", statStyle);
+            GUILayout.Label($"{snapshot.Count} cmds  {errCount} err", statStyle);
 
             if (GUILayout.Button("Clear", EditorStyles.toolbarButton, GUILayout.Width(44)))
                 MCPHandlers.ClearLog();
             EditorGUILayout.EndHorizontal();
 
-            EditorGUILayout.Space(4);
+            var transportNote = new GUIStyle(EditorStyles.centeredGreyMiniLabel)
+            {
+                fontSize = FONT_SIZE - 2,
+                wordWrap = true,
+            };
+            GUILayout.Label(
+                "Shows custom TCP commands received by AI Unity MCP Server. Official Unity MCP uses a separate Named Pipe transport.",
+                transportNote,
+                GUILayout.ExpandWidth(true));
+            EditorGUILayout.Space(2);
 
-            if (log.Count == 0)
+            if (snapshot.Count == 0)
             {
                 EditorGUILayout.Space(20);
-                var empty = new GUIStyle(EditorStyles.centeredGreyMiniLabel) { fontSize = FONT_SIZE };
-                GUILayout.Label("No commands yet. Start a chat and ask Claude to work with Unity.", empty);
+                var empty = new GUIStyle(EditorStyles.centeredGreyMiniLabel)
+                {
+                    fontSize = FONT_SIZE,
+                    wordWrap = true,
+                };
+                GUILayout.Label(
+                    "No custom TCP commands have reached this AI Unity MCP Server instance yet. Official Unity MCP Named Pipe activity appears in its own client logs.",
+                    empty,
+                    GUILayout.ExpandWidth(true));
                 return;
             }
 
@@ -536,9 +576,6 @@ namespace AIUnityMCPServer
                 { font = LogFont, fontSize = FONT_SIZE - 2 };
 
             _logScroll = EditorGUILayout.BeginScrollView(_logScroll, false, false, GUIStyle.none, GUIStyle.none, GUIStyle.none);
-
-            List<MCPHandlers.MCPLogEntry> snapshot;
-            lock (log) { snapshot = new List<MCPHandlers.MCPLogEntry>(log); }
 
             for (int i = snapshot.Count - 1; i >= 0; i--)
             {

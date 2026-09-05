@@ -18,6 +18,9 @@ namespace AIUnityMCPServer
         const int PRESENCE_SCHEMA_VERSION = 2;
         const double HEARTBEAT_INTERVAL = 2.0;
         const double REGISTRY_SWEEP_INTERVAL = 30.0;
+        const double PRESENCE_WARNING_INTERVAL = 30.0;
+        const int PRESENCE_WRITE_ATTEMPTS = 3;
+        const int PRESENCE_RETRY_DELAY_MS = 5;
         enum PresenceServerState { Offline, Online }
         static int _port;
 
@@ -30,6 +33,7 @@ namespace AIUnityMCPServer
         static long _startedAtUnixMs;
         static double _lastHeartbeat;
         static double _lastRegistrySweep;
+        static readonly Dictionary<string, double> _lastPresenceWarningByDirectory = new Dictionary<string, double>();
         public static string Label => _label ?? (_label = DetectLabel());
         public static string InstanceId => _instanceId ?? (_instanceId = CreateStableInstanceId());
         public static int Port => _port;
@@ -399,10 +403,23 @@ namespace AIUnityMCPServer
                 foreach (var dir in InstancesDirs())
                 {
                     try { WritePresenceAtomically(Path.Combine(dir, PresenceFileName), json); }
-                    catch (Exception e) { Debug.LogWarning($"[AI Unity MCP Server] Could not write presence to {dir}: {e.Message}"); }
+                    catch (Exception e) { LogPresenceWarning(dir, e); }
                 }
             }
             catch (Exception e) { Debug.LogWarning($"[AI Unity MCP Server] WritePresence failed: {e.Message}"); }
+        }
+
+        static void LogPresenceWarning(string directory, Exception exception)
+        {
+            double now = EditorApplication.timeSinceStartup;
+            if (_lastPresenceWarningByDirectory.TryGetValue(directory, out double lastWarning)
+                && now - lastWarning < PRESENCE_WARNING_INTERVAL)
+            {
+                return;
+            }
+
+            _lastPresenceWarningByDirectory[directory] = now;
+            Debug.LogWarning($"[AI Unity MCP Server] Could not write presence to {directory}: {exception.Message}");
         }
 
         static void WritePresenceAtomically(string destinationPath, string json)
@@ -412,13 +429,26 @@ namespace AIUnityMCPServer
 
             try
             {
-                if (File.Exists(destinationPath))
+                for (int attempt = 1; attempt <= PRESENCE_WRITE_ATTEMPTS; attempt++)
                 {
-                    File.Replace(temporaryPath, destinationPath, null);
-                }
-                else
-                {
-                    File.Move(temporaryPath, destinationPath);
+                    try
+                    {
+                        if (File.Exists(destinationPath))
+                        {
+                            File.Replace(temporaryPath, destinationPath, null);
+                        }
+                        else
+                        {
+                            File.Move(temporaryPath, destinationPath);
+                        }
+
+                        return;
+                    }
+                    catch (Exception exception) when (IsTransientPresenceWriteFailure(exception)
+                                                      && attempt < PRESENCE_WRITE_ATTEMPTS)
+                    {
+                        Thread.Sleep(PRESENCE_RETRY_DELAY_MS * attempt);
+                    }
                 }
             }
             catch
@@ -431,6 +461,9 @@ namespace AIUnityMCPServer
                 throw;
             }
         }
+
+        static bool IsTransientPresenceWriteFailure(Exception exception) =>
+            exception is IOException || exception is UnauthorizedAccessException;
 
         static void RemovePresence()
         {
