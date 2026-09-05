@@ -16,6 +16,14 @@ namespace AIUnityMCPServer
             return new JObject
             {
                 ["commands"] = new JArray(CommandPaths()),
+                ["tools"] = new JArray(MCPCommandCatalog.Load().Select(command => new JObject
+                {
+                    ["name"] = command.ToolName,
+                    ["command"] = command.Command,
+                    ["path"] = command.Path,
+                    ["description"] = command.Description,
+                    ["inputSchema"] = command.GetInputSchema()
+                })),
                 ["writeCommandsAllowed"] = AllowWrites
             };
         }
@@ -33,7 +41,7 @@ namespace AIUnityMCPServer
                 throw new ArgumentException("command is required.", nameof(command));
 
             JObject request = ParsePipelineBody(body);
-            string response = Dispatch(command.Trim(), request.ToString(Formatting.None));
+            string response = DispatchFrom("Pipeline", command.Trim(), request.ToString(Formatting.None));
             JToken result = ParsePipelineResponse(response);
             ThrowIfPipelineFailure(result);
             return result;

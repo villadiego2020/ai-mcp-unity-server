@@ -44,7 +44,7 @@ test("inbound activity refreshes on thread-safe log revision and describes trans
   assert.match(window, /if \(_activeTab == 2\)/);
   assert.match(window, /logRevision != _displayedMcpLogRevision/);
   assert.match(window, /MCPHandlers\.LogCount/);
-  assert.match(window, /custom TCP commands received by AI Unity MCP Server/);
-  assert.match(window, /Official Unity MCP uses a separate Named Pipe transport/);
-  assert.match(readme, /loopback TCP port[\s\S]*Official Unity MCP uses a separate Named Pipe transport/);
+  assert.match(window, /requests from Node\/TCP, Native, Pipeline and Editor/);
+  assert.match(window, /built-in tools use their own permissions and logs/);
+  assert.match(readme, /Native/);
 });

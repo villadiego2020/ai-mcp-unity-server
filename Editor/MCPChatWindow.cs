@@ -353,12 +353,10 @@ namespace AIUnityMCPServer
             int backend = CurrentBackend();
 
             int logCount = MCPHandlers.LogCount;
-            bool srvOn = MCPServer.IsRunning;
-            string srvDot = srvOn ? "● " : "○ ";
             var labels = new[] {
                 "API Chat"     + Badge(_api),
                 "Subscription" + Badge(_cli),
-                srvDot + "Claude In" + (logCount > 0 ? $" ({logCount})" : ""),
+                "Activity" + (logCount > 0 ? $" ({logCount})" : ""),
             };
 
             if (_activeTab < 2 && _activeTab != backend) _activeTab = backend;
@@ -409,7 +407,7 @@ namespace AIUnityMCPServer
             }
 
             bool srvOn2     = MCPServer.IsRunning;
-            bool onClaudeIn = _activeTab == 2;
+            bool onActivity = _activeTab == 2;
             float rightX = barR.xMax - 12;
 
             var gear = new GUIStyle(EditorStyles.label) { alignment = TextAnchor.MiddleCenter, fontSize = FONT_SIZE + 3 };
@@ -427,11 +425,11 @@ namespace AIUnityMCPServer
                 RRect(new Rect(pillR.x + 11, pillR.y + 7, 8, 8), liveC, 4f);
                 var pillStyle = new GUIStyle(EditorStyles.label) { alignment = TextAnchor.MiddleLeft, fontSize = FONT_SIZE - 1 };
                 pillStyle.normal.textColor = liveC;
-                GUI.Label(new Rect(pillR.x + 26, pillR.y, pw - 26, pillR.height), srvOn2 ? "online" : "offline", pillStyle);
+                GUI.Label(new Rect(pillR.x + 26, pillR.y, pw - 26, pillR.height), srvOn2 ? "TCP on" : "TCP off", pillStyle);
                 rightX -= pw + 10;
             }
 
-            if (!onClaudeIn)
+            if (!onActivity)
             {
                 int curRole = CurrentRole();
                 var roleR = new Rect(rightX - 66, barR.y + 8, 66, 22);
@@ -494,7 +492,7 @@ namespace AIUnityMCPServer
             // status dot + label
             var dotStyle = new GUIStyle(EditorStyles.toolbarButton) { fontSize = FONT_SIZE - 1 };
             dotStyle.normal.textColor = srvOn ? ONLINE : DANGER;
-            GUILayout.Label(srvOn ? $"● {MCPServer.Label}  port {MCPServer.Port}" : $"○ {MCPServer.Label}  stopped", dotStyle, GUILayout.Width(170));
+            GUILayout.Label(srvOn ? $"● TCP {MCPServer.Port}" : "○ TCP stopped", dotStyle, GUILayout.Width(130));
 
             // Start / Stop
             var btnStyle = new GUIStyle(EditorStyles.toolbarButton) { fontSize = FONT_SIZE - 1 };
@@ -524,6 +522,8 @@ namespace AIUnityMCPServer
 
             if (GUILayout.Button("Clear", EditorStyles.toolbarButton, GUILayout.Width(44)))
                 MCPHandlers.ClearLog();
+            if (GUILayout.Button("Connections", EditorStyles.toolbarButton, GUILayout.Width(85)))
+                MCPConnectionsWindow.Open();
             EditorGUILayout.EndHorizontal();
 
             var transportNote = new GUIStyle(EditorStyles.centeredGreyMiniLabel)
@@ -532,7 +532,7 @@ namespace AIUnityMCPServer
                 wordWrap = true,
             };
             GUILayout.Label(
-                "Shows custom TCP commands received by AI Unity MCP Server. Official Unity MCP uses a separate Named Pipe transport.",
+                "AI Unity MCP Server requests from Node/TCP, Native, Pipeline and Editor. Unity's built-in tools use their own permissions and logs.",
                 transportNote,
                 GUILayout.ExpandWidth(true));
             EditorGUILayout.Space(2);
@@ -546,7 +546,7 @@ namespace AIUnityMCPServer
                     wordWrap = true,
                 };
                 GUILayout.Label(
-                    "No custom TCP commands have reached this AI Unity MCP Server instance yet. Official Unity MCP Named Pipe activity appears in its own client logs.",
+                    "No requests have reached the shared dispatcher yet. Open Connections to check the target Editor and available tools.",
                     empty,
                     GUILayout.ExpandWidth(true));
                 return;
@@ -597,7 +597,7 @@ namespace AIUnityMCPServer
 
                 GUI.Label(new Rect(hdr.x + 25, hdr.y + 4, 58, 16), e.Time, timeStyle);
 
-                string friendlyLabel = FriendlyPath(e.Path);
+                string friendlyLabel = $"[{(string.IsNullOrEmpty(e.Source) ? "Earlier session" : e.Source)}] {FriendlyPath(e.Path)}";
                 GUI.Label(new Rect(hdr.x + 88, hdr.y + 3, hdr.width - 150, 19),
                     friendlyLabel, e.IsError ? pathStyleErr : pathStyleOk);
 
@@ -2420,7 +2420,7 @@ namespace AIUnityMCPServer
             else
             {
                 sb.AppendLine("🔴 **AI Unity MCP Server is not running**");
-                sb.AppendLine("Open **Claude In**, press **▶ Start**, then enter \"test\" again to verify the connection.");
+                sb.AppendLine("Open **Activity**, press **▶ Start**, then enter \"test\" again to verify the connection.");
             }
             return sb.ToString().TrimEnd();
         }
@@ -2451,7 +2451,7 @@ namespace AIUnityMCPServer
                 s.messages.Add(new ChatMessage("user", prompt));
                 s.messages.Add(new ChatMessage("assistant",
                     "🔴 **AI Unity MCP Server is not connected**\n\n" +
-                    "Open **AI Unity MCP Server → Claude In → ▶ Start**.\n" +
+                    "Open **AI Unity MCP Server → Activity → ▶ Start**.\n" +
                     "When the header indicator turns green and reads **online**, submit the request again."));
                 s.draft = "";
                 s.images.Clear();

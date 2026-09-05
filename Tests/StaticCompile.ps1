@@ -4,7 +4,9 @@ param(
 
     [string]$PipelinePackage,
 
-    [string]$EditorProjectFile
+    [string]$EditorProjectFile,
+
+    [string]$UnityEditor
 )
 
 $ErrorActionPreference = "Stop"
@@ -22,6 +24,7 @@ $unityRoot = Split-Path -Parent $unityEditorPath
 if (-not (Test-Path -LiteralPath $unityRoot)) {
     $unityRoot = "C:\Program Files\Unity\Hub\Editor\6000.0.75f1\Editor"
 }
+if ($UnityEditor) { $unityRoot = [IO.Path]::GetFullPath($UnityEditor) }
 $dataRoot = Join-Path $unityRoot "Data"
 $mono = Join-Path $dataRoot "MonoBleedingEdge\bin\mono.exe"
 $compiler = Join-Path $dataRoot "MonoBleedingEdge\lib\mono\msbuild\Current\bin\Roslyn\csc.exe"
@@ -29,6 +32,7 @@ $output = Join-Path ([IO.Path]::GetTempPath()) "AIUnityMCPServer.StaticTests.dll
 
 $unityVersionNode = $project.SelectSingleNode("//UnityVersion")
 $unityVersion = if ($unityVersionNode) { [string]$unityVersionNode.InnerText } else { string.Empty }
+if ($UnityEditor) { $unityVersion = Split-Path -Leaf (Split-Path -Parent $unityRoot) }
 $compileDefines = @("UNITY_EDITOR", "UNITY_INCLUDE_TESTS")
 if ($unityVersion -match '^(\d+)\.(\d+)\.') {
     $unityMajor = [int]$Matches[1]
@@ -50,6 +54,9 @@ $arguments = @(
 )
 foreach ($hintPath in $project.Project.ItemGroup.Reference.HintPath | Where-Object { $_ }) {
     $referencePath = [string]$hintPath
+    if ($UnityEditor -and $referencePath -match '^(.*[/\\]Editor)[/\\]Data[/\\]') {
+        $referencePath = $unityRoot + $referencePath.Substring($Matches[1].Length)
+    }
     if (-not [IO.Path]::IsPathRooted($referencePath)) {
         $referencePath = Join-Path $UnityProject $referencePath
     }
@@ -70,7 +77,7 @@ if (Test-Path -LiteralPath $ugui) {
 }
 
 $packageRoot = Split-Path -Parent $PSScriptRoot
-foreach ($source in Get-ChildItem (Join-Path $packageRoot "Editor") -Recurse -Filter "*.cs" -File | Where-Object { $_.FullName -notlike "*\Editor\TestRunner\*" }) {
+foreach ($source in Get-ChildItem (Join-Path $packageRoot "Editor") -Recurse -Filter "*.cs" -File | Where-Object { $_.FullName -notlike "*\Editor\TestRunner\*" -and $_.FullName -notlike "*\Editor\NativeMcp\*" }) {
     $arguments += "`"$($source.FullName)`""
 }
 foreach ($source in Get-ChildItem (Join-Path $packageRoot "Tests\Editor") -Recurse -Filter "*.cs" -File) {

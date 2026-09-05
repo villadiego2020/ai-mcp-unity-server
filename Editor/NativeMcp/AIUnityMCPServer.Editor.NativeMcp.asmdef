@@ -1,0 +1,11 @@
+{
+  "name": "AIUnityMCPServer.Editor.NativeMcp",
+  "rootNamespace": "AIUnityMCPServer.NativeMcp",
+  "references": ["AIUnityMCPServer.Editor", "Unity.AI.MCP.Editor", "Unity.Nuget.Newtonsoft-Json"],
+  "includePlatforms": ["Editor"],
+  "autoReferenced": false,
+  "defineConstraints": ["AI_UNITY_MCP_NATIVE_ASSISTANT"],
+  "versionDefines": [
+    { "name": "com.unity.ai.assistant", "expression": "[2.18.0-pre.2,2.19.0)", "define": "AI_UNITY_MCP_NATIVE_ASSISTANT" }
+  ]
+}

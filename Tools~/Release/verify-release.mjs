@@ -101,7 +101,11 @@ function verifyCanonicalText() {
     const name = relative(file);
     const content = fs.readFileSync(file, "utf8");
     if (/[\u0E00-\u0E7F]/u.test(content)) violations.push(`${name}: contains Thai text`);
-    if (!legacyIdentityAllowed.has(name) && legacyIdentityPattern.test(content)) {
+    // Unity's public native API name is upstream-owned, not this package's historical branding.
+    const identityText = name === "Editor/NativeMcp/NativeMcpIntegration.cs"
+      ? content.replaceAll("Unity" + legacyCSharpIdentity, "UnityNativeServer")
+      : content;
+    if (!legacyIdentityAllowed.has(name) && legacyIdentityPattern.test(identityText)) {
       violations.push(`${name}: contains a legacy technical identity`);
     }
     if (!name.endsWith("branding.contract.test.js") && prohibitedBrandPattern.test(content)) {
@@ -168,4 +172,4 @@ verifyCanonicalText();
 verifyDocumentationLinks();
 verifyToolContract();
 verifyTarball();
-console.log("Release verification passed for com.villadiego.ai-mcp-unity-server@2.0.2.");
+console.log(`Release verification passed for ${expectedName}@${readJson("package.json").version}.`);

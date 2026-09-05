@@ -74,7 +74,8 @@ namespace AIUnityMCPServer.Tests
             var hierarchy = (JObject)MCPHandlers.DispatchPipelineCommand("/scene/hierarchy", "{}");
 
             Assert.AreEqual("ok", ping.Value<string>("status"));
-            Assert.IsNotNull(hierarchy["roots"]);
+            Assert.That(hierarchy["hierarchy"], Is.TypeOf<JArray>());
+            Assert.That(MCPHandlers.Log.Last().Source, Is.EqualTo("Pipeline"));
         }
 
         [TestCase(null)]
@@ -95,7 +96,7 @@ namespace AIUnityMCPServer.Tests
             var structured = Assert.Throws<InvalidOperationException>(() =>
                 MCPHandlers.DispatchPipelineCommand("uitk_inspect", "{}"));
 
-            StringAssert.Contains("Unknown command path", legacy.Message);
+            StringAssert.Contains("Unknown command: /does-not-exist", legacy.Message);
             StringAssert.StartsWith("INVALID_REQUEST:", structured.Message);
         }
 

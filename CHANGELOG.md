@@ -3,6 +3,20 @@
 Notable changes are documented here using [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and [Semantic Versioning](https://semver.org/).
 
+## [2.1.0] - 2026-09-05
+
+### Added
+
+- Published all 73 shared tools, including UI Toolkit, through an optional Native Unity MCP adapter with matching input schemas and the existing write gate.
+- Added a Connections window for Native status, tool counts, client setup, and explicit read-only starts without an extra Node process.
+- Native screenshots return verified local PNG paths; use Node/TCP for inline images because Unity's tested Native relay drops image blocks.
+
+### Changed
+
+- Activity now identifies Native, Node/TCP, Pipeline, and Editor requests; Pipeline discovery includes full tool schemas.
+- Scoped write permission to each Editor session so connecting one project read-only cannot change another Editor's write state.
+- Documented Native compatibility, separate permissions for Unity's built-in tools, and the Unity CLI migration path.
+
 ## [2.0.2] - 2026-09-05
 
 ### Fixed
@@ -41,6 +55,7 @@ and [Semantic Versioning](https://semver.org/).
 - Initial Unity 6 Editor package with an in-Editor chat, Node MCP transport, scene and asset tools, runtime diagnostics, performance inspection, and opt-in write commands.
 - The original package identity was `com.mcpbridge`; it is retained here only as release history for 2.0 migration.
 
+[2.1.0]: https://github.com/villadiego2020/ai-mcp-unity-server/compare/v2.0.2...v2.1.0
 [2.0.2]: https://github.com/villadiego2020/ai-mcp-unity-server/compare/v2.0.1...v2.0.2
 [2.0.1]: https://github.com/villadiego2020/ai-mcp-unity-server/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/villadiego2020/ai-mcp-unity-server/compare/v1.0.0...v2.0.0

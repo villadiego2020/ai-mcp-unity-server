@@ -82,15 +82,15 @@ test("production and documentation contain only the canonical AI Unity MCP Serve
   const serverManifest = JSON.parse(fs.readFileSync(path.join(packageRoot, "Server~", "package.json"), "utf8"));
   const serverLock = JSON.parse(fs.readFileSync(path.join(packageRoot, "Server~", "package-lock.json"), "utf8"));
   assert.equal(packageManifest.name, "com.villadiego.ai-mcp-unity-server");
-  assert.equal(packageManifest.version, "2.0.2");
+  assert.equal(packageManifest.version, "2.1.0");
   assert.equal(packageManifest.displayName, "AI Unity MCP Server");
   assert.equal(packageManifest.author.name, "villadiego2020");
   assert.equal(serverManifest.name, "ai-mcp-unity-server");
-  assert.equal(serverManifest.version, "2.0.2");
+  assert.equal(serverManifest.version, "2.1.0");
   assert.equal(serverLock.name, "ai-mcp-unity-server");
-  assert.equal(serverLock.version, "2.0.2");
+  assert.equal(serverLock.version, "2.1.0");
   assert.equal(serverLock.packages[""].name, "ai-mcp-unity-server");
-  assert.equal(serverLock.packages[""].version, "2.0.2");
+  assert.equal(serverLock.packages[""].version, "2.1.0");
 });
 
 test("external project identity uses the canonical repository slug", () => {
@@ -108,7 +108,7 @@ test("external project identity uses the canonical repository slug", () => {
 
   const readme = fs.readFileSync(path.join(packageRoot, "README.md"), "utf8");
   assert.match(readme, /github\.com\/villadiego2020\/ai-mcp-unity-server\.git/);
-  assert.match(readme, /"com\.villadiego\.ai-mcp-unity-server":\s*"2\.0\.2"/);
+  assert.match(readme, /"com\.villadiego\.ai-mcp-unity-server":\s*"2\.1\.0"/);
   assert.doesNotMatch(readme, /C:[/\\]Work[/\\]git/i);
 });
 

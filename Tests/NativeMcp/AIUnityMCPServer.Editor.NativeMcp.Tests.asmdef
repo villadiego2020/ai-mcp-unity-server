@@ -1,0 +1,10 @@
+{
+  "name": "AIUnityMCPServer.Editor.NativeMcp.Tests",
+  "references": ["AIUnityMCPServer.Editor", "AIUnityMCPServer.Editor.NativeMcp", "Unity.AI.MCP.Editor", "Unity.Nuget.Newtonsoft-Json", "UnityEngine.TestRunner", "UnityEditor.TestRunner"],
+  "includePlatforms": ["Editor"],
+  "overrideReferences": true,
+  "precompiledReferences": ["nunit.framework.dll", "Newtonsoft.Json.dll"],
+  "autoReferenced": false,
+  "defineConstraints": ["UNITY_INCLUDE_TESTS", "AI_UNITY_MCP_NATIVE_ASSISTANT"],
+  "versionDefines": [{"name":"com.unity.ai.assistant","expression":"[2.18.0-pre.2,2.19.0)","define":"AI_UNITY_MCP_NATIVE_ASSISTANT"}]
+}

@@ -722,7 +722,7 @@ namespace AIUnityMCPServer
 
                     string result;
                     int status = 200;
-                    try { result = MCPHandlers.Dispatch(path, body); }
+                    try { result = MCPHandlers.DispatchFrom("Node/TCP", path, body); }
                     catch (Exception e) { result = $"{{\"error\":\"{Escape(e.Message)}\"}}"; status = 500; }
 
                     WriteResponse(stream, status, result);

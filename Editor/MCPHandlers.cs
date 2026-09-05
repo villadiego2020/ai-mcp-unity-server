@@ -13,16 +13,16 @@ namespace AIUnityMCPServer
 {
     public static partial class MCPHandlers
     {
-        static bool _allowWritesCache;
+        static volatile bool _allowWritesCache;
         public static bool AllowWrites
         {
             get
             {
                 if (System.Threading.Thread.CurrentThread.ManagedThreadId == _mainThreadId)
-                    _allowWritesCache = EditorPrefs.GetBool("AIUnityMCPServer_AllowWrites", false);
+                    _allowWritesCache = SessionState.GetBool("AIUnityMCPServer_AllowWrites", false);
                 return _allowWritesCache;
             }
-            set { EditorPrefs.SetBool("AIUnityMCPServer_AllowWrites", value); _allowWritesCache = value; }
+            set { SessionState.SetBool("AIUnityMCPServer_AllowWrites", value); _allowWritesCache = value; }
         }
 
         static readonly HashSet<string> WritePaths = new HashSet<string>
@@ -134,6 +134,7 @@ namespace AIUnityMCPServer
         {
             public string Time;
             public string Path;
+            public string Source;
             public string Body;
             public string Response;
             public long   Ms;
@@ -202,12 +203,13 @@ namespace AIUnityMCPServer
 
         static int _logSinceLastSave;
 
-        static void AppendLog(string path, string body, string result, long ms)
+        static void AppendLog(string path, string body, string result, long ms, string source)
         {
             var entry = new MCPLogEntry
             {
                 Time     = DateTime.Now.ToString("HH:mm:ss"),
                 Path     = path,
+                Source   = source,
                 Body     = TruncLog(body, 200),
                 Response = TruncLog(result, 400),
                 Ms       = ms,
@@ -233,6 +235,12 @@ namespace AIUnityMCPServer
         public static Func<string, string> GetTestResultsHandler;
 
         public static string Dispatch(string path, string body, bool rateLimited = true)
+            => DispatchCore(path, body, rateLimited, "Editor");
+
+        public static string DispatchFrom(string source, string path, string body)
+            => DispatchCore(path, body, true, source);
+
+        static string DispatchCore(string path, string body, bool rateLimited, string source)
         {
             path = ResolvePath(path);
 
@@ -244,7 +252,7 @@ namespace AIUnityMCPServer
                 if (_recent.Count >= RATE_MAX_PER_SEC)
                 {
                     var rl = "{\"error\":\"Rate limit exceeded: more than 25 commands per second were blocked to prevent a runaway workflow.\"}";
-                    AppendLog(path, body, rl, 0);
+                    AppendLog(path, body, rl, 0, source);
                     return rl;
                 }
                 _recent.Enqueue(now);
@@ -259,11 +267,11 @@ namespace AIUnityMCPServer
                         "READ_ONLY",
                         $"Allow Write Commands is OFF for '{path}'.",
                         "Enable AI Unity MCP Server/Allow Write Commands in Unity, then retry the same mutating request.");
-                    AppendLog(path, body, blocked, 0);
+                    AppendLog(path, body, blocked, 0, source);
                     return blocked;
                 }
                 var ro = $"{{\"error\":\"READ-ONLY mode blocked '{path}'. Enable AI Unity MCP Server/Allow Write Commands before modifying scenes or assets.\"}}";
-                AppendLog(path, body, ro, 0);
+                AppendLog(path, body, ro, 0, source);
                 return ro;
             }
 
@@ -353,12 +361,12 @@ namespace AIUnityMCPServer
                 _ => $"{{\"error\":\"Unknown command: {path}\"}}"
             };
             _sw.Stop();
-            AppendLog(path, body, _result, _sw.ElapsedMilliseconds);
+            AppendLog(path, body, _result, _sw.ElapsedMilliseconds, source);
             return _result;
         }
 
         // ── Ping ────────────────────────────────────────────────────────────
-        static string Ping() => "{\"status\":\"ok\",\"version\":\"2.0.2\"}";
+        static string Ping() => "{\"status\":\"ok\",\"version\":\"2.1.0\"}";
 
         static bool UIToolkitRequestRequiresWrite(string path, string body)
         {
@@ -1183,7 +1191,7 @@ public class {className} : MonoBehaviour
         static void CaptureMainThread()
         {
             _mainThreadId = System.Threading.Thread.CurrentThread.ManagedThreadId;
-            _allowWritesCache = EditorPrefs.GetBool("AIUnityMCPServer_AllowWrites", false);
+            _allowWritesCache = SessionState.GetBool("AIUnityMCPServer_AllowWrites", false);
             EditorApplication.update -= PumpMainQueue;
             EditorApplication.update += PumpMainQueue;
         }
