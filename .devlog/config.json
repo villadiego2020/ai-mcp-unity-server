@@ -1,0 +1,12 @@
+{
+  "project": "Unity MCP Server",
+  "short": "UNITYMCP",
+  "emoji": "🔌",
+  "color": "#94A3B8",
+  "colorInt": 9741240,
+  "type": "tool",
+  "tracker": "BOBOPM:CMM",
+  "language": "th",
+  "devlog": { "webhookEnv": "DISCORD_WEBHOOK_DEVLOG", "threadId": null },
+  "gameChannel": null
+}
