@@ -136,3 +136,59 @@ test("MCP handshake exposes connection tools and reconnects an offline Editor re
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("queued requests can wait beyond eight seconds and uncertain mutations are never replayed", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-queue-bridge-"));
+  const calls = new Map();
+  const timers = new Set();
+  const fakeUnity = http.createServer((request, response) => {
+    request.resume();
+    request.on("end", () => {
+      const count = (calls.get(request.url) || 0) + 1;
+      calls.set(request.url, count);
+      if (request.url === "/gameobject/delete" || (request.url === "/scene/list" && count === 1)) {
+        response.destroy();
+        return;
+      }
+      const reply = () => {
+        response.writeHead(200, { "Content-Type": "application/json" });
+        response.end(JSON.stringify({ ok: true }));
+      };
+      if (request.url === "/gameobject/create") {
+        const timer = setTimeout(() => { timers.delete(timer); reply(); }, 8500);
+        timers.add(timer);
+      } else reply();
+    });
+  });
+  await new Promise(resolve => fakeUnity.listen(0, "127.0.0.1", resolve));
+  const transport = new StdioClientTransport({
+    command: process.execPath,
+    args: [serverEntry],
+    cwd: root,
+    stderr: "pipe",
+    env: { ...process.env, HOME: root, USERPROFILE: root, UNITY_MCP_PORT: String(fakeUnity.address().port) },
+  });
+  const client = new Client({ name: "mcp-queue-tests", version: "1.0.0" });
+  try {
+    await client.connect(transport);
+    const delayed = parseToolResult(await client.callTool({ name: "unity_create_gameobject", arguments: { name: "QueueFixture" } }));
+    assert.equal(delayed.ok, true);
+    assert.equal(calls.get("/gameobject/create"), 1, "a queued write must complete without timeout replay");
+
+    const uncertain = parseToolResult(await client.callTool({ name: "unity_delete_gameobject", arguments: { name: "QueueFixture" } }));
+    assert.equal(uncertain.code, "EXECUTION_OUTCOME_UNKNOWN");
+    assert.equal(uncertain.retryable, false);
+    assert.equal(calls.get("/gameobject/delete"), 1, "a connection loss after dispatch must not replay a mutation");
+
+    const recoveredRead = parseToolResult(await client.callTool({ name: "unity_scene_list", arguments: {} }));
+    assert.equal(recoveredRead.ok, true);
+    assert.equal(calls.get("/scene/list"), 2, "safe reads retain bounded reconnect retries");
+  } finally {
+    for (const timer of timers) clearTimeout(timer);
+    await client.close();
+    await transport.close();
+    fakeUnity.closeAllConnections();
+    await stopServer(fakeUnity);
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

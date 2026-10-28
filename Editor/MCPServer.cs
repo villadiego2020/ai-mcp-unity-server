@@ -243,6 +243,7 @@ namespace AIUnityMCPServer
                 try
                 {
                     candidate = new TcpListener(IPAddress.Loopback, p);
+                    MCPListenerSocket.PreventInheritance(candidate.Server);
                     candidate.Start();
                     _listener = candidate;
                     _port = p;

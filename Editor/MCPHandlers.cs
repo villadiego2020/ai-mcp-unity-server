@@ -139,6 +139,7 @@ namespace AIUnityMCPServer
             public string Response;
             public long   Ms;
             public bool   IsError;
+            public int    RepeatCount;
             [System.NonSerialized] public bool Expanded;
         }
 
@@ -217,7 +218,15 @@ namespace AIUnityMCPServer
             };
             lock (Log)
             {
-                Log.Add(entry);
+                MCPLogEntry previous = Log.Count > 0 ? Log[Log.Count - 1] : null;
+                if (path == "/ping" && !entry.IsError && previous != null &&
+                    previous.Path == path && previous.Source == source && !previous.IsError)
+                {
+                    entry.RepeatCount = Math.Max(1, previous.RepeatCount) + 1;
+                    entry.Expanded = previous.Expanded;
+                    Log[Log.Count - 1] = entry;
+                }
+                else Log.Add(entry);
                 while (Log.Count > LOG_MAX) Log.RemoveAt(0);
                 _logSinceLastSave++;
             }
@@ -257,6 +266,11 @@ namespace AIUnityMCPServer
                 }
                 _recent.Enqueue(now);
             }
+
+            // Queue the complete operation so authorization is checked when execution starts.
+            // Ping is transport liveness only and remains available while the Editor is busy.
+            if (path != "/ping" && System.Threading.Thread.CurrentThread.ManagedThreadId != _mainThreadId)
+                return ExecuteOnMainThread(() => DispatchCore(path, body, false, source));
 
             bool requestRequiresWrite = WritePaths.Contains(path) || UIToolkitRequestRequiresWrite(path, body);
             if (requestRequiresWrite && !AllowWrites)
@@ -1184,8 +1198,7 @@ public class {className} : MonoBehaviour
         // ── Helpers ───────────────────────────────────────────────────────────
         static int _mainThreadId = -1;
 
-        static readonly System.Collections.Concurrent.ConcurrentQueue<Action> _mainQueue
-            = new System.Collections.Concurrent.ConcurrentQueue<Action>();
+        static readonly MCPRequestQueue _mainQueue = new MCPRequestQueue(64, 20000);
 
         [InitializeOnLoadMethod]
         static void CaptureMainThread()
@@ -1194,16 +1207,15 @@ public class {className} : MonoBehaviour
             _allowWritesCache = SessionState.GetBool("AIUnityMCPServer_AllowWrites", false);
             EditorApplication.update -= PumpMainQueue;
             EditorApplication.update += PumpMainQueue;
+            AssemblyReloadEvents.beforeAssemblyReload -= CancelPendingRequests;
+            AssemblyReloadEvents.beforeAssemblyReload += CancelPendingRequests;
+            EditorApplication.quitting -= CancelPendingRequests;
+            EditorApplication.quitting += CancelPendingRequests;
         }
 
-        static void PumpMainQueue()
-        {
-            while (_mainQueue.TryDequeue(out var job))
-            {
-                try { job(); }
-                catch (Exception exception) { Debug.LogError("[AI Unity MCP Server] Queued main-thread job failed: " + exception.Message); }
-            }
-        }
+        static void PumpMainQueue() => _mainQueue.Pump(4, 5);
+
+        static void CancelPendingRequests() => _mainQueue.CancelPending();
 
         static string ExecuteOnMainThread(Func<string> action)
         {
@@ -1213,21 +1225,7 @@ public class {className} : MonoBehaviour
                 catch (Exception e) { return $"{{\"error\":\"{EscapeJson(e.Message)}\"}}"; }
             }
 
-            string result = null;
-            Exception ex = null;
-            var done = new System.Threading.ManualResetEventSlim(false);
-
-            _mainQueue.Enqueue(() =>
-            {
-                try { result = action(); }
-                catch (Exception e) { ex = e; }
-                finally { done.Set(); }
-            });
-
-            if (!done.Wait(20000))
-                return "{\"error\":\"Timeout after 20 seconds. The main thread may be compiling, importing or processing a very large scene.\"}";
-            if (ex != null) return $"{{\"error\":\"{EscapeJson(ex.Message)}\"}}";
-            return result ?? "{\"error\":\"no result\"}";
+            return _mainQueue.Execute(action, 25000);
         }
 
         static PrimitiveType ParsePrimitive(string s) => s?.ToLower() switch

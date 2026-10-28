@@ -12,12 +12,26 @@ import {
   resolveInstance,
 } from "./registry.js";
 
-const TIMEOUT_MS = 8000;
-const MAX_RETRIES = 8;
+// Unity allows 20 seconds to start queued work and 25 seconds to report its outcome.
+const TIMEOUT_MS = 30000;
+const MAX_RETRIES = 2;
 const RETRY_DELAY_MS = 500;
 const MAX_RETRY_DELAY_MS = 2000;
 const DEFAULT_CONNECT_TIMEOUT_SECONDS = 10;
 const COMMANDS_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), "commands.json");
+
+// An explicit allowlist fails closed for new commands and stateful read-like tools.
+const RETRY_SAFE_PATHS = new Set([
+  "/ping", "/compile-status", "/scene/list", "/scene/hierarchy", "/scene/count",
+  "/asset/find", "/audit/textures", "/audit/unused", "/audit/empty-folders",
+  "/console/read", "/console/logfile", "/console/logs", "/object/inspect",
+  "/selection/get", "/script/read", "/diagnose/state", "/diagnose/deep",
+  "/diagnose/fusion", "/perf/audit", "/perf/worst", "/code/refactor-audit",
+  "/watch/get", "/event/log-get", "/asset/so-read", "/scene/raycast",
+  "/scene/overlap", "/scene/navmesh-path", "/console/alert-get",
+  "/diagnose/exceptions", "/git/status", "/tests/results", "/uitk/inspect",
+  "/uitk/validate",
+]);
 
 let selectedTarget = null;
 
@@ -100,9 +114,11 @@ async function fetchUnity(instance, request) {
 
 async function callUnity(requestPath, body = {}, options = {}) {
   const timeoutMs = options.timeoutMs ?? TIMEOUT_MS;
-  const maxRetries = options.maxRetries ?? MAX_RETRIES;
+  const retrySafe = RETRY_SAFE_PATHS.has(requestPath);
+  const maxRetries = retrySafe ? (options.maxRetries ?? MAX_RETRIES) : 1;
   let lastFailure = null;
   let lastInstance = null;
+  let outcomeUnknown = false;
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     const resolved = resolveTarget({ requireServerOn: true });
@@ -114,6 +130,7 @@ async function callUnity(requestPath, body = {}, options = {}) {
       try {
         return await fetchUnity(resolved.instance, { path: requestPath, body, timeoutMs });
       } catch (error) {
+        outcomeUnknown = !retrySafe;
         lastFailure = {
           code: error.name === "AbortError" ? "TIMEOUT" : "CONNECTION_FAILED",
           error: error.message,
@@ -129,9 +146,12 @@ async function callUnity(requestPath, body = {}, options = {}) {
   }
 
   return {
-    code: lastFailure?.code || "CONNECTION_FAILED",
+    code: outcomeUnknown ? "EXECUTION_OUTCOME_UNKNOWN" : lastFailure?.code || "CONNECTION_FAILED",
     error: lastFailure?.error || "AI Unity MCP Server did not respond.",
-    action: "Call unity_connection_status, then unity_connect. Pass an exact target if status is AMBIGUOUS.",
+    action: outcomeUnknown
+      ? "The request was not replayed because it may already have executed. Inspect Unity state before retrying."
+      : "Call unity_connection_status, then unity_connect. Pass an exact target if status is AMBIGUOUS.",
+    ...(outcomeUnknown ? { retryable: false, transportCode: lastFailure?.code } : {}),
     lastTarget: lastInstance ? publicInstance(lastInstance) : undefined,
   };
 }

@@ -598,6 +598,7 @@ namespace AIUnityMCPServer
                 GUI.Label(new Rect(hdr.x + 25, hdr.y + 4, 58, 16), e.Time, timeStyle);
 
                 string friendlyLabel = $"[{(string.IsNullOrEmpty(e.Source) ? "Earlier session" : e.Source)}] {FriendlyPath(e.Path)}";
+                if (e.RepeatCount > 1) friendlyLabel += $" (x{e.RepeatCount}, latest)";
                 GUI.Label(new Rect(hdr.x + 88, hdr.y + 3, hdr.width - 150, 19),
                     friendlyLabel, e.IsError ? pathStyleErr : pathStyleOk);
 
