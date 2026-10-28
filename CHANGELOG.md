@@ -3,6 +3,23 @@
 Notable changes are documented here using [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and [Semantic Versioning](https://semver.org/).
 
+## [2.2.0] - 2026-10-28
+
+### Added
+
+- Added owned managed sessions with private source workspaces, queued builds, independent Player windows, and a session dashboard with owner closure events.
+- Added conflict-checked Assets publication to Main with durable import/compile outcomes, recovery, and explicit refresh of pristine private workspaces.
+- Exposed four managed tool groups, bringing the shared manifest to 77 tools; gameplay requests default to an owned private Player.
+
+### Fixed
+
+- Bounded request queues and timeouts, coalesced PING traffic, and prevented expired writes and inherited TCP listeners across reloads.
+- Hardened Windows process ownership checks and accelerated large source hashing without weakening integrity validation.
+
+### Compatibility
+
+- Managed Players are qualified on Windows Unity 6000.0.75f1; other versions fail closed. Code and asset updates require rebuild/restart, semantic input requires a game adapter, and closing never publishes to Main.
+
 ## [2.1.0] - 2026-09-05
 
 ### Added
@@ -55,6 +72,7 @@ and [Semantic Versioning](https://semver.org/).
 - Initial Unity 6 Editor package with an in-Editor chat, Node MCP transport, scene and asset tools, runtime diagnostics, performance inspection, and opt-in write commands.
 - The original package identity was `com.mcpbridge`; it is retained here only as release history for 2.0 migration.
 
+[2.2.0]: https://github.com/villadiego2020/ai-mcp-unity-server/compare/v2.1.0...v2.2.0
 [2.1.0]: https://github.com/villadiego2020/ai-mcp-unity-server/compare/v2.0.2...v2.1.0
 [2.0.2]: https://github.com/villadiego2020/ai-mcp-unity-server/compare/v2.0.1...v2.0.2
 [2.0.1]: https://github.com/villadiego2020/ai-mcp-unity-server/compare/v2.0.0...v2.0.1

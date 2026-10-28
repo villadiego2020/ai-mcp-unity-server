@@ -25,19 +25,19 @@ test("release identities and versions agree across every runtime surface", () =>
   const handlers = read("Editor/MCPHandlers.cs");
 
   assert.equal(manifest.name, "com.villadiego.ai-mcp-unity-server");
-  assert.equal(manifest.version, "2.1.0");
+  assert.equal(manifest.version, "2.2.0");
   assert.equal(server.name, "ai-mcp-unity-server");
   assert.equal(server.version, manifest.version);
   assert.equal(lock.name, server.name);
   assert.equal(lock.version, manifest.version);
   assert.equal(lock.packages[""].name, server.name);
   assert.equal(lock.packages[""].version, manifest.version);
-  assert.match(bridge, /version:\s*"2\.1\.0"/);
-  assert.match(handlers, /\\"version\\":\\"2\.1\.0\\"/);
+  assert.match(bridge, /version:\s*"2\.2\.0"/);
+  assert.match(handlers, /\\"version\\":\\"2\.2\.0\\"/);
 });
 
 test("release verifier accepts the exact tag and rejects a mismatched tag", () => {
-  const accepted = spawnSync(process.execPath, [releaseVerifier, "--tag", "v2.1.0"], {
+  const accepted = spawnSync(process.execPath, [releaseVerifier, "--tag", "v2.2.0"], {
     cwd: packageRoot,
     encoding: "utf8",
   });
@@ -67,19 +67,19 @@ test("OpenUPM publication is tag-triggered and explicitly gated", () => {
   assert.match(workflow, /package:\s*com\.villadiego\.ai-mcp-unity-server/);
 });
 
-test("current README and concise changelog describe the 2.1.0 release", () => {
+test("current README and concise changelog describe the 2.2.0 release", () => {
   const readme = read("README.md");
   const changelog = read("CHANGELOG.md");
-  const currentRelease = changelog.split("## [2.0.2]")[0];
+  const currentRelease = changelog.split("## [2.1.0]")[0];
 
-  assert.match(readme, /## Install version 2\.1\.0/);
-  assert.match(readme, /"com\.villadiego\.ai-mcp-unity-server":\s*"2\.1\.0"/);
+  assert.match(readme, /## Install version 2\.2\.0/);
+  assert.match(readme, /"com\.villadiego\.ai-mcp-unity-server":\s*"2\.2\.0"/);
   assert.match(readme, /Native Unity MCP/);
   assert.match(readme, /ai_mcp_list_commands/);
   assert.match(readme, /ai_mcp_dispatch/);
   assert.doesNotMatch(readme, /C:[/\\]Work[/\\]git/i);
 
-  assert.match(currentRelease, /## \[2\.1\.0\] - 2026-09-05/);
+  assert.match(currentRelease, /## \[2\.2\.0\] - 2026-10-28/);
   assert.match(currentRelease, /### Added/);
   assert.doesNotMatch(changelog, /^## \[Unreleased\]/m);
   assert.ok(currentRelease.split(/\r?\n/).length <= 35, "the current release notes should stay concise");
