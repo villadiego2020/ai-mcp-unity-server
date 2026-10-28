@@ -12,6 +12,8 @@
 
 # FEATURE
 
+- [CMM-012 Persistent project write permission](archive/CMM-012.md) — Explicit project-scoped Allow Write survives reload/restart; saved-choice startup preserves it and explicit read-only revokes it. Unity 170/Node 30 tests and three-process restart checks passed; Baowan saved opt-in enabled and guarded refresh returned 2.2.0. Watch: live gate query unavailable; no universal uptime claim.
+
 - [CMM-011 Managed independent Players and explicit Main publication](archive/CMM-011.md) — Windows Unity 6000.0.75f1 supports private sessions, queued builds, owner notifications, conflict-checked Assets publication/compile recovery and explicit refresh; 168 Unity/30 Node tests and actual Main/Player workflow passed. Watch: rebuild/restart and input adapter required; other engines, dashboard mouse and live Native coexistence unqualified.
 
 - [CMM-010 Native Unity MCP integration](archive/CMM-010.md) — Version 2.1.0 exposes all 73 tools via optional Native registration, adds Connections and shared Activity, and isolates write permission per Editor; 81 Unity tests, 26 Node tests and 7 relay checks passed. Watch: Native screenshots use verified local files; Unity deprecates this Native API in favor of CLI.
