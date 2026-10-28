@@ -12,6 +12,8 @@
 
 # FEATURE
 
+- [CMM-011 Managed independent Players and explicit Main publication](archive/CMM-011.md) — Windows Unity 6000.0.75f1 supports private sessions, queued builds, owner notifications, conflict-checked Assets publication/compile recovery and explicit refresh; 168 Unity/30 Node tests and actual Main/Player workflow passed. Watch: rebuild/restart and input adapter required; other engines, dashboard mouse and live Native coexistence unqualified.
+
 - [CMM-010 Native Unity MCP integration](archive/CMM-010.md) — Version 2.1.0 exposes all 73 tools via optional Native registration, adds Connections and shared Activity, and isolates write permission per Editor; 81 Unity tests, 26 Node tests and 7 relay checks passed. Watch: Native screenshots use verified local files; Unity deprecates this Native API in favor of CLI.
 
 - [CMM-002 Unity CLI and pipeline integration](archive/CMM-002.md) — Official Pipeline 0.6.0-exp.1 now exposes two native commands through the existing dispatcher without replacing Node/TCP; static Unity 6 compilation and 17 Node tests passed. Watch: live discovery remains blocked by the local UPM host error.

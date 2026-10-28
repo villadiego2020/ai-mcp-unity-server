@@ -8,3 +8,9 @@
 - ห้ามใช้ branded name/prefix ที่มีคำว่า `Delta` ทุกกรณี รวมถึง EditorPrefs, SessionState, Library paths, thread names, config และ docs
 - ชื่อแสดงผลมาตรฐานคือ `AI Unity MCP Server`; identifier ที่เว้นวรรคไม่ได้ใช้ `AIUnityMCPServer`
 - Repository content must be English-only: no Thai comments, strings, tests, manifests, README text, or documentation.
+
+## CMM-011 Managed gameplay defaults
+
+- AI gameplay/playtest requests should default to an owned independent managed Player; shared Main Editor Play requires explicit intent.
+- Keep private source changes isolated until explicit conflict review and Main publication; closing a game must not automatically publish.
+- Use lightweight disposable Unity projects for MCP qualification and preserve Baowan's scene and Play state.
