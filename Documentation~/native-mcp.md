@@ -38,8 +38,9 @@ for the same tools unless you intentionally need both paths.
   Editor's filesystem to open the Native screenshot path.
 - Native, Node/TCP, Pipeline and Editor requests appear in Activity. Unity's built-in tools use
   their own permissions and logging; our write gate does not restrict those tools.
-- Write permission belongs to the current Editor session. Reloading scripts preserves it; a new
-  Editor starts OFF. Old global permission values are not migrated to an enabled state.
+- Write permission is remembered locally per exact project path across script reloads and Editor restarts.
+  Projects without an explicit opt-in start OFF. Starting with Our Writes OFF persists an opt-out.
+  Old global permission values are not migrated to an enabled state.
 - Registration restores tools after Unity refreshes its registry and cleans up before reload/quit.
   It never replaces another tool with the same name or silently re-enables a disabled tool.
 

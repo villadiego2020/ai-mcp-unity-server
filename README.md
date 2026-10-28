@@ -1,7 +1,7 @@
 # AI Unity MCP Server
 
 ![Unity 6000.0+](https://img.shields.io/badge/Unity-6000.0%2B-222222)
-![Version 2.2.0](https://img.shields.io/badge/version-2.2.0-2d6cdf)
+![Version 2.2.1](https://img.shields.io/badge/version-2.2.1-2d6cdf)
 ![77 Editor tools](https://img.shields.io/badge/tools-77-2d6cdf)
 ![MIT](https://img.shields.io/badge/license-MIT-green)
 
@@ -19,7 +19,7 @@ explicit write gate; the package is Editor-only and is not included in player bu
 
 Photon Fusion tools activate when Fusion is installed and otherwise return an availability message.
 
-## Install version 2.2.0
+## Install version 2.2.1
 
 Open `Packages/manifest.json`, add the OpenUPM registry, and pin the package version:
 
@@ -33,16 +33,16 @@ Open `Packages/manifest.json`, add the OpenUPM registry, and pin the package ver
     }
   ],
   "dependencies": {
-    "com.villadiego.ai-mcp-unity-server": "2.2.0"
+    "com.villadiego.ai-mcp-unity-server": "2.2.1"
   }
 }
 ```
 
-OpenUPM installation becomes available after the package metadata is accepted and a `v2.2.0` tag is
+OpenUPM installation becomes available after the package metadata is accepted and a `v2.2.1` tag is
 published. The same published version can be pinned directly to its immutable Git tag:
 
 ```json
-"com.villadiego.ai-mcp-unity-server": "https://github.com/villadiego2020/ai-mcp-unity-server.git#v2.2.0"
+"com.villadiego.ai-mcp-unity-server": "https://github.com/villadiego2020/ai-mcp-unity-server.git#v2.2.1"
 ```
 
 For local package development, use Unity Package Manager's **Add package from disk** and select this
@@ -98,9 +98,10 @@ is described in [UI Toolkit tools](Documentation~/ui-toolkit.md), and Play Mode 
 
 ## Safety model
 
-- The TCP server binds to loopback only and starts read-only.
-- Our write permission belongs to this Editor session, survives domain reload, and starts OFF in a new Editor.
-  A read-only connection to another Editor cannot change this session.
+- The TCP server binds to loopback only. Projects without an explicit write opt-in start read-only.
+- Allow Write Commands is remembered locally per exact project path across script reloads and Editor restarts.
+  Automatic startup and reconnect preserve that choice; disabling writes persists the opt-out. Other projects
+  and clones have separate preferences. A connection cannot enable writes in a project without an opt-in.
 - Mutating routes are explicitly classified and rejected while the write gate is off.
 - Asset deletion is restricted to project `Assets/` files and uses the operating-system trash.
 - UI Toolkit writes use preview hashes, optimistic concurrency checks, backups, and rollback.

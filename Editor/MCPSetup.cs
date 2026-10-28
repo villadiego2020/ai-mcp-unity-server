@@ -223,7 +223,7 @@ namespace AIUnityMCPServer
             AppendCheck(report, MCPServer.IsRunning
                 ? $"PASS AI Unity MCP Server online at port {MCPServer.Port}"
                 : "FAIL Use unity_connect or AI Unity MCP Server → Server → Start");
-            report.AppendLine($"  INFO instanceId={MCPServer.InstanceId} label={MCPServer.Label} autoStartReadOnly={MCPServer.IsAutoStartEnabled} writeGate={(MCPHandlers.AllowWrites ? "ON" : "OFF")}");
+            report.AppendLine($"  INFO instanceId={MCPServer.InstanceId} label={MCPServer.Label} autoStart={MCPServer.IsAutoStartEnabled} writeGate={(MCPHandlers.AllowWrites ? "ON" : "OFF")}");
 
             if (codex.Succeeded && registration != RegistrationState.Current && !string.IsNullOrEmpty(registrationDetail))
             {

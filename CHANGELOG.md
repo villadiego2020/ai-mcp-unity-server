@@ -3,6 +3,14 @@
 Notable changes are documented here using [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and [Semantic Versioning](https://semver.org/).
 
+## [2.2.1] - 2026-10-28
+
+### Changed
+
+- Remember explicit Allow Write choices per project across domain reloads and Editor restarts, preserving both enabled and disabled states.
+- Automatic and remote starts retain the saved project choice; unset projects remain read-only and explicit read-only starts revoke saved write permission.
+- Clarified connection setup, permission controls, and connector guidance; retained project isolation and existing write gates.
+
 ## [2.2.0] - 2026-10-28
 
 ### Added
@@ -72,6 +80,7 @@ and [Semantic Versioning](https://semver.org/).
 - Initial Unity 6 Editor package with an in-Editor chat, Node MCP transport, scene and asset tools, runtime diagnostics, performance inspection, and opt-in write commands.
 - The original package identity was `com.mcpbridge`; it is retained here only as release history for 2.0 migration.
 
+[2.2.1]: https://github.com/villadiego2020/ai-mcp-unity-server/compare/v2.2.0...v2.2.1
 [2.2.0]: https://github.com/villadiego2020/ai-mcp-unity-server/compare/v2.1.0...v2.2.0
 [2.1.0]: https://github.com/villadiego2020/ai-mcp-unity-server/compare/v2.0.2...v2.1.0
 [2.0.2]: https://github.com/villadiego2020/ai-mcp-unity-server/compare/v2.0.1...v2.0.2

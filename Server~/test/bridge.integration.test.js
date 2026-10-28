@@ -38,7 +38,7 @@ async function stopServer(server) {
   await new Promise(resolve => server.close(resolve));
 }
 
-test("MCP handshake exposes connection tools and reconnects an offline Editor read-only", async () => {
+test("MCP handshake exposes connection tools and reconnects an offline Editor without changing its saved permission", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-bridge-"));
   const home = path.join(root, "home");
   const project = path.join(root, "UnityProject");
@@ -112,7 +112,8 @@ test("MCP handshake exposes connection tools and reconnects an offline Editor re
 
     const startRequest = JSON.parse(fs.readFileSync(path.join(requestDirectory, "request-start"), "utf8"));
     assert.equal(startRequest.instanceId, "unity-test-project");
-    assert.equal(startRequest.readOnly, true);
+    assert.equal(startRequest.preserveWritePreference, true);
+    assert.equal(startRequest.readOnly, undefined);
 
     reboundUnity = await startFakeUnity();
     await stopServer(fakeUnity);

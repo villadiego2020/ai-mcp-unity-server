@@ -13,16 +13,42 @@ namespace AIUnityMCPServer
 {
     public static partial class MCPHandlers
     {
+        const string WriteSessionKey = "AIUnityMCPServer_AllowWrites";
         static volatile bool _allowWritesCache;
+        static string _writePreferenceKey;
+
+        internal static string WritePreferenceKeyForProject(string projectRoot)
+        {
+            string normalized = Path.GetFullPath(projectRoot).Replace('\\', '/').TrimEnd('/');
+            if (Application.platform == RuntimePlatform.WindowsEditor) normalized = normalized.ToLowerInvariant();
+            return "AIUnityMCPServer_AllowWrites_Project_" + Hash128.Compute(normalized);
+        }
+
+        static string WritePreferenceKey => _writePreferenceKey ??
+            (_writePreferenceKey = WritePreferenceKeyForProject(Directory.GetParent(Application.dataPath).FullName));
+
+        static void RestoreWritePermission()
+        {
+            // Preserve an explicit choice from this Editor when upgrading from session-only storage.
+            if (!EditorPrefs.HasKey(WritePreferenceKey))
+                EditorPrefs.SetBool(WritePreferenceKey, SessionState.GetBool(WriteSessionKey, false));
+            _allowWritesCache = EditorPrefs.GetBool(WritePreferenceKey, false);
+            SessionState.SetBool(WriteSessionKey, _allowWritesCache);
+        }
         public static bool AllowWrites
         {
             get
             {
                 if (System.Threading.Thread.CurrentThread.ManagedThreadId == _mainThreadId)
-                    _allowWritesCache = SessionState.GetBool("AIUnityMCPServer_AllowWrites", false);
+                    RestoreWritePermission();
                 return _allowWritesCache;
             }
-            set { SessionState.SetBool("AIUnityMCPServer_AllowWrites", value); _allowWritesCache = value; }
+            set
+            {
+                EditorPrefs.SetBool(WritePreferenceKey, value);
+                SessionState.SetBool(WriteSessionKey, value);
+                _allowWritesCache = value;
+            }
         }
 
         static readonly HashSet<string> WritePaths = new HashSet<string>
@@ -397,7 +423,7 @@ namespace AIUnityMCPServer
         }
 
         // ── Ping ────────────────────────────────────────────────────────────
-        static string Ping() => "{\"status\":\"ok\",\"version\":\"2.2.0\"}";
+        static string Ping() => "{\"status\":\"ok\",\"version\":\"2.2.1\"}";
 
         static bool UIToolkitRequestRequiresWrite(string path, string body)
         {
@@ -1221,7 +1247,7 @@ public class {className} : MonoBehaviour
         static void CaptureMainThread()
         {
             _mainThreadId = System.Threading.Thread.CurrentThread.ManagedThreadId;
-            _allowWritesCache = SessionState.GetBool("AIUnityMCPServer_AllowWrites", false);
+            RestoreWritePermission();
             EditorApplication.update -= PumpMainQueue;
             EditorApplication.update += PumpMainQueue;
             AssemblyReloadEvents.beforeAssemblyReload -= CancelPendingRequests;

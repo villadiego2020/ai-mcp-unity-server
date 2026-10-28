@@ -1,4 +1,7 @@
 using System.Linq;
+using System;
+using System.IO;
+using System.Reflection;
 using Newtonsoft.Json.Linq;
 using NUnit.Framework;
 using UnityEditor;
@@ -10,24 +13,81 @@ namespace AIUnityMCPServer.Tests
         static MCPCommandDefinition Find(string name) => MCPCommandCatalog.Load().Single(item => item.ToolName == name);
 
         [Test]
-        public void WriteGateUsesEditorSessionAndLeavesGlobalPreferenceUnchanged()
+        public void WriteGatePersistsProjectChoiceAndLeavesGlobalPreferenceUnchanged()
         {
             const string key = "AIUnityMCPServer_AllowWrites";
             bool previous = MCPHandlers.AllowWrites;
             bool globalExists = EditorPrefs.HasKey(key);
             bool globalValue = EditorPrefs.GetBool(key, false);
+            var projectKeyField = typeof(MCPHandlers).GetField("_writePreferenceKey", BindingFlags.Static | BindingFlags.NonPublic);
+            object previousProjectKey = projectKeyField.GetValue(null);
+            string projectKey = "AIUnityMCPServer_TestWrites_" + Guid.NewGuid().ToString("N");
             try
             {
+                projectKeyField.SetValue(null, projectKey);
                 foreach (bool allowed in new[] { true, false })
                 {
                     MCPHandlers.AllowWrites = allowed;
                     Assert.That(SessionState.GetBool(key, !allowed), Is.EqualTo(allowed));
+                    Assert.That(EditorPrefs.GetBool(projectKey, !allowed), Is.EqualTo(allowed));
+                    // A new domain/Editor loses its SessionState and cached value, but not EditorPrefs.
+                    SessionState.EraseBool(key);
+                    typeof(MCPHandlers).GetField("_allowWritesCache", BindingFlags.Static | BindingFlags.NonPublic).SetValue(null, !allowed);
+                    typeof(MCPHandlers).GetMethod("RestoreWritePermission", BindingFlags.Static | BindingFlags.NonPublic).Invoke(null, null);
                     Assert.That(MCPHandlers.AllowWrites, Is.EqualTo(allowed));
                     Assert.That(EditorPrefs.HasKey(key), Is.EqualTo(globalExists));
                     Assert.That(EditorPrefs.GetBool(key, false), Is.EqualTo(globalValue));
                 }
             }
-            finally { MCPHandlers.AllowWrites = previous; }
+            finally
+            {
+                EditorPrefs.DeleteKey(projectKey);
+                projectKeyField.SetValue(null, previousProjectKey);
+                MCPHandlers.AllowWrites = previous;
+            }
+        }
+
+        [Test]
+        public void WritePreferenceUsesExactNormalizedProjectPath()
+        {
+            var method = typeof(MCPHandlers).GetMethod("WritePreferenceKeyForProject", BindingFlags.Static | BindingFlags.NonPublic);
+            string root = Path.Combine(Path.GetTempPath(), "WritePreferenceProject");
+            string Key(string path) => (string)method.Invoke(null, new object[] { path });
+            Assert.That(Key(root), Is.EqualTo(Key(Path.Combine(root, "child", ".."))));
+            Assert.That(Key(root), Is.Not.EqualTo(Key(root + "_clone_0")));
+            Assert.That(Key(root), Is.Not.EqualTo(Key(root + "Other")));
+            if (UnityEngine.Application.platform == UnityEngine.RuntimePlatform.WindowsEditor)
+                Assert.That(Key(root), Is.EqualTo(Key(root.ToUpperInvariant())));
+        }
+
+        [Test]
+        public void UnsetProjectIgnoresLegacyGlobalPermissionButMigratesCurrentSessionChoice()
+        {
+            const string sessionKey = "AIUnityMCPServer_AllowWrites";
+            bool previous = MCPHandlers.AllowWrites;
+            bool globalExists = EditorPrefs.HasKey(sessionKey);
+            bool globalValue = EditorPrefs.GetBool(sessionKey, false);
+            var field = typeof(MCPHandlers).GetField("_writePreferenceKey", BindingFlags.Static | BindingFlags.NonPublic);
+            object previousKey = field.GetValue(null);
+            string projectKey = "AIUnityMCPServer_TestWrites_" + Guid.NewGuid().ToString("N");
+            try
+            {
+                field.SetValue(null, projectKey);
+                EditorPrefs.SetBool(sessionKey, true);
+                SessionState.EraseBool(sessionKey);
+                Assert.That(MCPHandlers.AllowWrites, Is.False);
+                EditorPrefs.DeleteKey(projectKey);
+                SessionState.SetBool(sessionKey, true);
+                Assert.That(MCPHandlers.AllowWrites, Is.True);
+                Assert.That(EditorPrefs.GetBool(projectKey, false), Is.True);
+            }
+            finally
+            {
+                EditorPrefs.DeleteKey(projectKey);
+                if (globalExists) EditorPrefs.SetBool(sessionKey, globalValue); else EditorPrefs.DeleteKey(sessionKey);
+                field.SetValue(null, previousKey);
+                MCPHandlers.AllowWrites = previous;
+            }
         }
 
         [Test]

@@ -48,7 +48,7 @@ namespace AIUnityMCPServer
             bool writes = MCPHandlers.AllowWrites;
             bool selected = EditorGUILayout.Toggle("Allow Write Commands", writes);
             if (selected != writes) MCPHandlers.AllowWrites = selected;
-            EditorGUILayout.HelpBox("The write switch protects this package's tools on every connection. Unity's built-in tools have separate permissions in Native Settings.", MessageType.Info);
+            EditorGUILayout.HelpBox("The write switch is remembered for this project across Editor restarts and protects this package's tools on every connection. Unity's built-in tools have separate permissions in Native Settings.", MessageType.Info);
 
             EditorGUILayout.LabelField("Native Unity MCP (compatibility)", EditorStyles.boldLabel);
             EditorGUILayout.LabelField("Server", native.Available ? native.Running ? "Running" : "Stopped" : "Unavailable");

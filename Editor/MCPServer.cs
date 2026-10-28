@@ -123,7 +123,7 @@ namespace AIUnityMCPServer
             if (WasRunning)
                 Start();
             else if (AutoStartEnabled)
-                StartReadOnly();
+                Start();
             else
             {
                 WriteOfflinePresence();
@@ -153,7 +153,7 @@ namespace AIUnityMCPServer
 
         const string MENU_START = "AI Unity MCP Server/Server/Start";
         const string MENU_STOP  = "AI Unity MCP Server/Server/Stop";
-        const string MENU_AUTO_START = "AI Unity MCP Server/Server/Auto Start Read-Only";
+        const string MENU_AUTO_START = "AI Unity MCP Server/Server/Auto Start";
 
         [MenuItem(MENU_START, true)]
         static bool ValidateStart()
@@ -180,10 +180,10 @@ namespace AIUnityMCPServer
         static void ToggleAutoStart()
         {
             AutoStartEnabled = !AutoStartEnabled;
-            Debug.Log($"[AI Unity MCP Server] Auto Start Read-Only {(AutoStartEnabled ? "enabled" : "disabled")}");
+            Debug.Log($"[AI Unity MCP Server] Auto Start {(AutoStartEnabled ? "enabled" : "disabled")}");
             if (AutoStartEnabled && !_running)
             {
-                StartReadOnly();
+                Start();
             }
         }
 
@@ -543,8 +543,8 @@ namespace AIUnityMCPServer
                 if (File.Exists(p))
                 {
                     File.Delete(p);
-                    Debug.Log("[AI Unity MCP Server] request-start detected; starting the server read-only");
-                    StartReadOnly();
+                    Debug.Log("[AI Unity MCP Server] request-start detected; starting with this project's saved write permission");
+                    Start();
                 }
             }
             catch (Exception e) { Debug.LogWarning($"[AI Unity MCP Server] watch error: {e.Message}"); }
