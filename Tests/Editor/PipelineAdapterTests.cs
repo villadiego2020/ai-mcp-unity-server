@@ -61,7 +61,7 @@ namespace AIUnityMCPServer.Tests
                 .Select(command => command.Value<string>("path"))
                 .ToArray();
 
-            Assert.AreEqual(73, manifestPaths.Length);
+            Assert.AreEqual(77, manifestPaths.Length);
             CollectionAssert.AreEqual(dispatcherPaths, listedPaths);
             CollectionAssert.IsSubsetOf(manifestPaths, listedPaths);
             Assert.AreEqual(MCPHandlers.AllowWrites, listed.Value<bool>("writeCommandsAllowed"));

@@ -43,6 +43,7 @@ namespace AIUnityMCPServer
             EditorGUILayout.LabelField("Project", MCPPackagePaths.ProjectRoot());
             EditorGUILayout.LabelField("Editor instance", MCPServer.InstanceId);
             EditorGUILayout.LabelField("Package", MCPPackagePaths.PackageVersion());
+            if (GUILayout.Button("Managed Sessions / Player Windows")) ManagedSessionsWindow.Open();
             EditorGUILayout.Space();
             bool writes = MCPHandlers.AllowWrites;
             bool selected = EditorGUILayout.Toggle("Allow Write Commands", writes);

@@ -46,7 +46,7 @@ namespace AIUnityMCPServer.Tests
                     Assert.That(matching.Length, Is.EqualTo(1), definition.ToolName);
                     Assert.That(JToken.DeepEquals(JToken.FromObject(matching[0].inputSchema), definition.GetInputSchema()), Is.True, definition.ToolName);
                 }
-                Assert.That(NativeMcpIntegration.GetStatus().RegisteredTools, Is.EqualTo(73));
+                Assert.That(NativeMcpIntegration.GetStatus().RegisteredTools, Is.EqualTo(77));
             }
         }
 

@@ -262,6 +262,49 @@
       "waitFrames": { "type": "integer", "opt": true, "default": 2, "min": 1, "max": 10, "desc": "Frames to wait before snapshot or interaction" },
       "screenshot": { "type": "boolean", "opt": true, "default": true, "desc": "Attach a Play Mode screenshot when the run completes" },
       "maxNodes": { "type": "integer", "opt": true, "default": 250, "min": 1, "max": 1000, "desc": "Maximum live visual-tree nodes in before/after state" }
+    } },
+    { "tool": "unity_session", "command": "managed_session", "path": "/managed/session", "noRetry": true, "description": "Manage an owned private-source testing session in one main Editor. Windows v1 permits two active sessions and one FIFO headless build worker. register returns sessionId, one-time secret capability and private workspacePath; preserve the capability, wait for ready, edit only that workspace. Poll events with a cursor to learn user/owner/OS closure; notifications do not guarantee AI wake-up. Closing preserves source and never merges main.", "params": {
+      "action": { "type": "enum", "values": ["register","renew","status","events","close"] },
+      "sessionId": { "type": "string", "opt": true, "max": 64 },
+      "capability": { "type": "string", "opt": true, "max": 128 },
+      "label": { "type": "string", "opt": true, "max": 80 },
+      "requestId": { "type": "string", "opt": true, "max": 128 },
+      "leaseSeconds": { "type": "integer", "opt": true, "min": 60, "max": 7200, "default": 1800 },
+      "afterSequence": { "type": "integer", "opt": true, "min": 0, "default": 0 }
+    } },
+    { "tool": "unity_workspace", "command": "managed_workspace", "path": "/managed/workspace", "noRetry": true, "description": "Read/write owned private Assets; write requires Write ON, requestId and expectedHash. integration_plan asynchronously previews three-way Assets changes against an immutable baseline. Poll integration_status with planId and offset/limit for exact deltas/conflicts/unsupported scopes. Explicit integration_apply requires planId, exact planHash, requestId, valid owner lease and Write ON; returns operationId. Poll integration_status with operationId through sourceApplied/import/compile result, including compile_failed diagnostics without losing applied source. integration_cancel(operationId,requestId) permits owned cleanup with writes OFF only before source writes; after publication starts it reports cancelAccepted=false and retains source facts. Main operations order with snapshots/builds, reject stale/unsafe changes, and preserve unrelated Main edits. Apply is bounded to 512 entries/512 MiB. refresh_from_main requires requestId/Write ON/pristine private source; retains old workspace and running Players. Closed remote owners still need a valid lease. No automatic publication on close or live code reload. Legacy baselines unavailable explicitly.", "params": {
+      "action": { "type": "enum", "values": ["status","read","write","changes","integration_plan","integration_status","integration_apply","integration_cancel","refresh_from_main"] },
+      "sessionId": { "type": "string", "max": 64 },
+      "capability": { "type": "string", "max": 128 },
+      "requestId": { "type": "string", "opt": true, "max": 128 },
+      "path": { "type": "string", "opt": true, "max": 512 },
+      "content": { "type": "string", "opt": true, "max": 262144 },
+      "expectedHash": { "type": "string", "opt": true, "max": 64 },
+      "planId": { "type": "string", "opt": true, "max": 64 },
+      "planHash": { "type": "string", "opt": true, "max": 64 },
+      "operationId": { "type": "string", "opt": true, "max": 64 },
+      "offset": { "type": "integer", "opt": true, "min": 0, "default": 0 },
+      "limit": { "type": "integer", "opt": true, "min": 1, "max": 500, "default": 100 }
+    } },
+    { "tool": "unity_player_build", "command": "managed_build", "path": "/managed/build", "noRetry": true, "description": "Asynchronously snapshot and build an owned private Unity project to an immutable Windows Player artifact. start requires Write ON and unique requestId. One worker at a time uses private project/Library/output and the main Editor's Unity version. Poll status/jobId; cancel affects only the verified owned worker. Enabled saved build scenes are required. Licensing/UPM/compiler failures remain explicit. Four retained builds per session.", "params": {
+      "action": { "type": "enum", "values": ["start","status","cancel"] },
+      "sessionId": { "type": "string", "max": 64 },
+      "capability": { "type": "string", "max": 128 },
+      "requestId": { "type": "string", "opt": true, "max": 128 },
+      "jobId": { "type": "string", "opt": true, "max": 64 }
+    } },
+    { "tool": "unity_player", "command": "managed_player", "path": "/managed/player", "noRetry": true, "description": "Start/status/input/capture/close a real standalone game window owned by a testing session. start uses a successful jobId; at most one active Player per session. Mutations need requestId; start/input require Write ON, cleanup remains available with writes OFF. input is an explicitly declared game semantic adapter, never global keyboard/mouse injection. capture returns commandId: poll status with runId+commandId for actual Player PNG. Separate processes do not automatically isolate PlayerPrefs/saves/backends; use the opt-in per-run SaveDirectory adapter.", "params": {
+      "action": { "type": "enum", "values": ["start","status","input","capture","close"] },
+      "sessionId": { "type": "string", "max": 64 },
+      "capability": { "type": "string", "max": 128 },
+      "requestId": { "type": "string", "opt": true, "max": 128 },
+      "jobId": { "type": "string", "opt": true, "max": 64 },
+      "runId": { "type": "string", "opt": true, "max": 64 },
+      "commandId": { "type": "string", "opt": true, "max": 64 },
+      "inputName": { "type": "string", "opt": true, "max": 128 },
+      "inputValue": { "type": "string", "opt": true, "max": 32768 },
+      "width": { "type": "integer", "opt": true, "min": 320, "max": 1280, "default": 640 },
+      "height": { "type": "integer", "opt": true, "min": 180, "max": 720, "default": 360 }
     } }
   ]
 }

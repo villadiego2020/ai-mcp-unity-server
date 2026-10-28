@@ -2,7 +2,7 @@
 
 ![Unity 6000.0+](https://img.shields.io/badge/Unity-6000.0%2B-222222)
 ![Version 2.1.0](https://img.shields.io/badge/version-2.1.0-2d6cdf)
-![73 Editor tools](https://img.shields.io/badge/tools-73-2d6cdf)
+![77 Editor tools](https://img.shields.io/badge/tools-77-2d6cdf)
 ![MIT](https://img.shields.io/badge/license-MIT-green)
 
 AI Unity MCP Server gives AI clients and the in-Editor chat a shared, evidence-based way to inspect,
@@ -75,7 +75,13 @@ For registry and Git installs, prefer Setup's stable cached `index.js` path over
 - Inspect first. Enable **AI Unity MCP Server → Allow Write Commands** only for intended changes.
 - Turn the write gate off after the change. Read-only auto-start also resets it to off.
 
-The command manifest currently exposes exactly 73 MCP tools:
+The command manifest currently exposes exactly 77 MCP tools. Four grouped tools implement [managed private testing sessions and Player windows](Documentation~/managed-sessions.md): `unity_session`, `unity_workspace`, `unity_player_build` and `unity_player`. Managed sessions are enabled in ordinary Windows Editors on the exact qualified version **6000.0.75f1**. Other versions fail closed; **6000.5.10f1** remains excluded and has not been requalified after the stability fixes. The existing 73 tools retain their normal availability.
+
+Each managed session edits a private saved-source project and runs its own built Player. One build worker processes the queue; applying code changes requires an explicit rebuild and Player restart. Source never merges into main automatically. Semantic input requires a game adapter; isolated saves require opt-in use of the per-run save directory. Separate Players do not automatically isolate shared accounts or external services.
+
+Gameplay/testing requests, including a plain "run Unity", default to the caller's managed private Player flow. Shared Main Editor `play_control` is reserved for an explicit request to use Main Editor Play Mode. If managed execution or an adapter is unavailable, report that limitation without silently switching to shared Main. Connecting, discovery and health/PING checks alone do not register a session, build or launch a Player. This is AI routing guidance supplied by this connector, not a natural-language parser or interception of commands sent directly to another MCP server.
+
+New sessions also support asynchronous `unity_workspace action=integration_plan` and paginated `integration_status`: an immutable baseline produces exact Assets deltas, conflicts and unsupported changes outside Assets. Preview never writes Main. Explicit `integration_apply` requires the reviewed plan hash, owner authority and Write Commands ON; its durable job reports source application and import/compile outcomes. `refresh_from_main` forks pristine private source while retaining its old generation and running Players. Neither action happens automatically on close; older sessions without a captured baseline return `BASELINE_UNAVAILABLE`.
 
 | Area | Tools | Examples |
 |---|---:|---|
@@ -109,8 +115,8 @@ Native tool counts and connected clients. Choose the connection your client supp
 
 | Connection | Setup | Shared tools |
 |---|---|---|
-| Native Unity MCP | Install supported Unity AI Assistant, open Connections, start Native with our writes OFF, then use Native Settings to configure your client | All 73 individual tools with full schemas; no additional Node process |
-| Node/TCP | Configure Codex and run Doctor using the first-run steps above | All 73 tools plus 5 multi-Editor connection tools |
+| Native Unity MCP | Install supported Unity AI Assistant, open Connections, start Native with our writes OFF, then use Native Settings to configure your client | All 77 individual tools with full schemas; no additional Node process |
+| Node/TCP | Configure Codex and run Doctor using the first-run steps above | All 77 tools plus 5 multi-Editor connection tools |
 | Unity CLI / MCP | Target this project with Unity CLI and use its MCP setup | `ai_mcp_list_commands` returns all schemas; `ai_mcp_dispatch` executes a command |
 
 The optional Native adapter adds the **AI Unity MCP Server** tool group automatically. Existing group

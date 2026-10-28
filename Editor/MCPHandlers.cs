@@ -206,6 +206,19 @@ namespace AIUnityMCPServer
 
         static void AppendLog(string path, string body, string result, long ms, string source)
         {
+            // Managed responses can issue owner capabilities. Never persist request/response secrets.
+            if (path.StartsWith("/managed/", StringComparison.Ordinal))
+            {
+                body = "[Managed session request redacted]";
+                bool failed = false;
+                try
+                {
+                    var error = Newtonsoft.Json.Linq.JObject.Parse(result ?? "{}") ["error"];
+                    failed = error != null && error.Type != Newtonsoft.Json.Linq.JTokenType.Null && !string.IsNullOrEmpty(error.ToString());
+                }
+                catch (Newtonsoft.Json.JsonException) { failed = true; }
+                result = failed ? "{\"error\":\"Managed request failed; inspect the tool response.\"}" : "[Managed session response redacted]";
+            }
             var entry = new MCPLogEntry
             {
                 Time     = DateTime.Now.ToString("HH:mm:ss"),
@@ -272,7 +285,7 @@ namespace AIUnityMCPServer
             if (path != "/ping" && System.Threading.Thread.CurrentThread.ManagedThreadId != _mainThreadId)
                 return ExecuteOnMainThread(() => DispatchCore(path, body, false, source));
 
-            bool requestRequiresWrite = WritePaths.Contains(path) || UIToolkitRequestRequiresWrite(path, body);
+            bool requestRequiresWrite = WritePaths.Contains(path) || UIToolkitRequestRequiresWrite(path, body) || ManagedRequestRequiresWrite(path, body);
             if (requestRequiresWrite && !AllowWrites)
             {
                 if (path == "/uitk/apply" || path == "/uitk/playtest")
@@ -293,6 +306,10 @@ namespace AIUnityMCPServer
             string _result = path switch
             {
                 "/ping"              => Ping(),
+                "/managed/session"   => ManagedRequest("session", body),
+                "/managed/workspace" => ManagedRequest("workspace", body),
+                "/managed/build"     => ManagedRequest("build", body),
+                "/managed/player"    => ManagedRequest("player", body),
                 "/console/read"      => ReadConsole(body),
                 "/object/inspect"    => InspectObject(body),
                 "/object/add-component" => AddComponent(body),

@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import fs from "fs";
+import crypto from "node:crypto";
 import path from "path";
 import { fileURLToPath } from "url";
 import {
@@ -34,6 +35,113 @@ const RETRY_SAFE_PATHS = new Set([
 ]);
 
 let selectedTarget = null;
+const responseTarget = Symbol("Unity response target");
+
+// Notifications are best effort; the Editor's owner event journal remains authoritative.
+class ManagedOwnerNotifications {
+  constructor(send) { this.send = send; this.groups = new Map(); this.warned = false; }
+  warn() {
+    if (!this.warned) console.error("[AI Unity MCP Server] Owner notifications unavailable; read unity_session events for durable closure history.");
+    this.warned = true;
+  }
+  remember(response, request, target) {
+    const id = response?.sessionId || request.sessionId;
+    const capability = response?.capability || request.capability;
+    if (response?.error || !id || !capability || !target?.projectPath) return false;
+    const file = path.resolve(target.projectPath, "Library", "AIUnityMCPServer", "managed-sessions", "registry.json");
+    let group = this.groups.get(file);
+    const existing = group?.owners.get(id);
+    const count = [...this.groups.values()].reduce((total, item) => total + item.owners.size, 0);
+    if (!existing && count >= 16) { this.warn(); return false; }
+    if (!group) {
+      group = { file, owners: new Map(), reading: false, pending: false, failures: 0, closed: false };
+      try {
+        group.watcher = fs.watch(path.dirname(file), { persistent: false }, (_event, filename) => {
+          if (filename == null || String(filename).toLowerCase() === path.basename(file).toLowerCase()) this.schedule(group);
+        });
+        group.watcher.on("error", () => { this.warn(); this.close(group); });
+        this.groups.set(file, group);
+      } catch { this.warn(); return false; }
+    }
+    if (existing?.timer) clearTimeout(existing.timer);
+    const owner = existing || { id, cursor: 0 };
+    owner.capability = capability;
+    group.owners.set(id, owner);
+    this.expire(group, owner, response.leaseUntilUnixMs || Date.now() + 1800000);
+    this.schedule(group);
+    return true;
+  }
+  expire(group, owner, leaseUntil) {
+    clearTimeout(owner.timer);
+    const milliseconds = Math.max(1000, Math.min(7350000, Number(leaseUntil) - Date.now() + 150000));
+    owner.timer = setTimeout(() => this.remove(group, owner.id), milliseconds);
+    owner.timer.unref();
+  }
+  schedule(group) {
+    if (group.closed) return;
+    clearTimeout(group.timer);
+    group.timer = setTimeout(() => this.read(group), 25);
+    group.timer.unref();
+  }
+  async read(group) {
+    if (group.closed) return;
+    if (group.reading) { group.pending = true; return; }
+    group.reading = true;
+    try {
+      if ((await fs.promises.stat(group.file)).size > 8 * 1024 * 1024) throw new Error("Registry budget exceeded");
+      const text = await fs.promises.readFile(group.file, "utf8");
+      if (Buffer.byteLength(text) > 8 * 1024 * 1024) throw new Error("Registry budget exceeded");
+      const registry = JSON.parse(text);
+      if (registry.schemaVersion !== 1 || !Array.isArray(registry.sessions) || !Array.isArray(registry.runs)) throw new Error("Unsupported registry");
+      group.failures = 0;
+      for (const owner of [...group.owners.values()]) {
+        if (group.closed || group.owners.get(owner.id) !== owner) break;
+        const session = registry.sessions.find(item => item.id === owner.id);
+        const hash = crypto.createHash("sha256").update(owner.capability).digest("hex");
+        if (!session || !/^[0-9a-f]{64}$/.test(session.capabilityHash || "") ||
+            !crypto.timingSafeEqual(Buffer.from(hash, "hex"), Buffer.from(session.capabilityHash, "hex"))) {
+          this.remove(group, owner.id);
+          continue;
+        }
+        this.expire(group, owner, session.leaseUntil);
+        const events = (Array.isArray(session.events) ? session.events : []).slice(-128).filter(item => item.sequence > owner.cursor).sort((a, b) => a.sequence - b.sequence);
+        for (const event of events) {
+          owner.cursor = Math.max(owner.cursor, Number(event.sequence) || 0);
+          if (event.type !== "player_closed") continue;
+          const data = { type: "player_closed", sessionId: owner.id, owner: session.label, runId: event.runId, jobId: event.jobId,
+            sequence: event.sequence, time: event.time, reason: event.reason };
+          let deadline;
+          try {
+            await Promise.race([this.send({ level: "info", logger: "AIUnityMCPServer.sessions", data }),
+              new Promise((_, reject) => { deadline = setTimeout(() => reject(new Error("Notification deadline")), 1000); deadline.unref(); })]);
+          } catch { this.warn(); }
+          finally { clearTimeout(deadline); }
+        }
+        if (["closed", "expired", "failed"].includes(session.state) &&
+            !registry.runs.some(run => run.sessionId === owner.id && ["starting", "running", "closing"].includes(run.state))) this.remove(group, owner.id);
+      }
+    } catch {
+      if (++group.failures <= 3) this.schedule(group);
+      else this.warn();
+    } finally {
+      group.reading = false;
+      if (group.pending) { group.pending = false; this.schedule(group); }
+    }
+  }
+  remove(group, id) {
+    const owner = group.owners.get(id);
+    if (owner) { clearTimeout(owner.timer); owner.capability = ""; group.owners.delete(id); }
+    if (!group.owners.size) this.close(group);
+  }
+  close(group) {
+    group.closed = true;
+    clearTimeout(group.timer);
+    group.watcher?.close();
+    for (const owner of group.owners.values()) { clearTimeout(owner.timer); owner.capability = ""; }
+    group.owners.clear(); this.groups.delete(group.file);
+  }
+  closeAll() { for (const group of [...this.groups.values()]) this.close(group); }
+}
 
 const sleep = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
 
@@ -128,7 +236,9 @@ async function callUnity(requestPath, body = {}, options = {}) {
     } else {
       lastInstance = resolved.instance;
       try {
-        return await fetchUnity(resolved.instance, { path: requestPath, body, timeoutMs });
+        const response = await fetchUnity(resolved.instance, { path: requestPath, body, timeoutMs });
+        if (response && typeof response === "object") Object.defineProperty(response, responseTarget, { value: targetIdentity(resolved.instance) });
+        return response;
       } catch (error) {
         outcomeUnknown = !retrySafe;
         lastFailure = {
@@ -303,8 +413,14 @@ const server = new McpServer({
   name: "AIUnityMCPServer",
   version: "2.1.0",
 }, {
-  instructions: "Use unity_connection_status when connection state is unknown. Use unity_connect for one-call discovery, read-only start, selection, and health verification. If a result has code AMBIGUOUS, never guess: show the candidates and ask for an instanceId, pid, port, or full projectPath. Remote and automatic starts keep Allow Write Commands OFF; only the user should enable writes in Unity.",
+  capabilities: { logging: {} },
+  instructions: "For gameplay, playtest, or run-game requests (including 'run Unity'), default to an owned managed session. Shared Main Play Mode requires an explicit user request. Connect/Ping never creates a session, build, or Player. Never silently fall back to Main. Managed private testing sessions are enabled in ordinary interactive Windows Editors on the exact qualified Unity version 6000.0.75f1; other versions fail closed, including 6000.5.10f1 which has not been requalified. Normal batch build workers remain inert; automated supervisors require -aiMcpManagedSupervisor. Managed code changes require a queued private build and Player restart; never promise instant hot reload or automatic source integration into main. Publishing private edits to Main requires explicit user intent: integration_plan, poll integration_status with planId, review conflicts and unsupported scopes, then integration_apply with the exact planHash and stable requestId while writes are ON. Poll the returned operationId through sourceApplied and compile result; compile_failed retains applied source and diagnostics. Closing never publishes. Other sessions stay pinned until explicit pristine-source refresh_from_main and rebuild/restart. Semantic input requires a game adapter; isolated saves require opt-in use of the per-run save directory. Use unity_connection_status when connection state is unknown. Use unity_connect for one-call discovery, read-only start, selection, and health verification. If a result has code AMBIGUOUS, never guess: show the candidates and ask for an instanceId, pid, port, or full projectPath. Remote and automatic starts keep Allow Write Commands OFF; only the user should enable writes in Unity. For gameplay/testing run requests, including plain 'run Unity', default to the caller-owned managed private flow: resume an existing owned unity_session using its saved capability or register one, wait for its private workspace, edit only that workspace, queue unity_player_build and poll status, then unity_player start. Preserve the returned owner capability and session/run IDs; never infer chat identity from a label. Use shared Main Editor play_control only when the user explicitly requests Main Editor Play Mode. If the managed Unity version, build, companion or game adapter is unavailable, report the limitation; never silently fall back to shared Main Play Mode. Connecting, discovery, health checks and PING alone must not register a session, build or create a Player; begin that workflow only for an actual gameplay/testing run request. These instructions guide this connector's AI tool choice; they do not implement a natural-language parser or intercept commands sent directly to other MCP servers.",
 });
+const ownerNotifications = new ManagedOwnerNotifications(params => server.sendLoggingMessage(params));
+const previousClose = server.server.onclose;
+server.server.onclose = () => { ownerNotifications.closeAll(); previousClose?.(); };
+process.once("exit", () => ownerNotifications.closeAll());
+process.stdin.once("end", () => ownerNotifications.closeAll());
 
 server.tool("unity_list_instances", "List all discoverable Unity Editors, including AI Unity MCP Server state, stable instanceId, heartbeat freshness, project path, and the active target for this MCP session.", {}, async () => {
   const instances = listInstances();
@@ -375,11 +491,15 @@ for (const command of commands) {
   const options = { timeoutMs: command.timeoutMs, maxRetries: command.noRetry ? 1 : undefined };
   server.tool(command.tool, command.description, toZodShape(command.params), async args => {
     const response = await callUnity(command.path, args || {}, options);
+    if (command.command === "managed_session" && ownerNotifications.remember(response, args || {}, response?.[responseTarget]))
+      response.notificationDelivery = "Best-effort owner-only MCP notifications/message for player_closed; poll events for durable history. AI wake-up depends on the client.";
     const screenshotPath = command.command === "capture_screenshot"
       ? response?.screenshot
       : command.command === "uitk_playtest" && response?.status === "done"
         ? response?.evidence?.screenshot
-        : null;
+        : command.command === "managed_player" && response?.command?.state === "done"
+          ? response.command.screenshot
+          : null;
     if (screenshotPath && !response.error) {
       try {
         const png = fs.readFileSync(screenshotPath);

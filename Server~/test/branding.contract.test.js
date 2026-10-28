@@ -144,13 +144,14 @@ test("all maintained repository text is English-only", () => {
 test("translated command manifest preserves its executable contract", () => {
   const manifest = JSON.parse(fs.readFileSync(path.join(packageRoot, "Server~", "commands.json"), "utf8"));
   const hash = crypto.createHash("sha256")
-    .update(JSON.stringify(commandContract(manifest)))
+    .update(JSON.stringify(commandContract({ ...manifest, commands: manifest.commands.slice(0, 73) })))
     .digest("hex");
   assert.equal(hash, "0bd39ac04298f84d1795e94ba253d8508d78de76befde114df70b23512c6bbeb");
-  assert.equal(manifest.commands.length, 73);
-  assert.equal(new Set(manifest.commands.map(command => command.tool)).size, 73);
-  assert.equal(new Set(manifest.commands.map(command => command.command)).size, 73);
-  assert.equal(new Set(manifest.commands.map(command => command.path)).size, 73);
+  assert.deepEqual(manifest.commands.slice(73).map(command => command.tool), ["unity_session", "unity_workspace", "unity_player_build", "unity_player"]);
+  assert.equal(manifest.commands.length, 77);
+  assert.equal(new Set(manifest.commands.map(command => command.tool)).size, 77);
+  assert.equal(new Set(manifest.commands.map(command => command.command)).size, 77);
+  assert.equal(new Set(manifest.commands.map(command => command.path)).size, 77);
 
   const dispatcherSource = filesUnder(path.join(packageRoot, "Editor"), file => /^MCPHandlers(?:\.[^.]+)?\.cs$/.test(path.basename(file)))
     .map(file => fs.readFileSync(file, "utf8"))

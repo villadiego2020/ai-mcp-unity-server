@@ -58,6 +58,7 @@ function verifyManifest() {
   }
   assert.deepEqual(root.files, [
     "Editor",
+    "Runtime",
     "Server~/commands.json",
     "Server~/index.js",
     "Server~/package.json",
@@ -137,9 +138,9 @@ function verifyDocumentationLinks() {
 
 function verifyToolContract() {
   const manifest = readJson("Server~/commands.json");
-  assert.equal(manifest.commands.length, 73);
-  assert.equal(new Set(manifest.commands.map(command => command.tool)).size, 73);
-  assert.equal(new Set(manifest.commands.map(command => command.path)).size, 73);
+  assert.equal(manifest.commands.length, 77);
+  assert.equal(new Set(manifest.commands.map(command => command.tool)).size, 77);
+  assert.equal(new Set(manifest.commands.map(command => command.path)).size, 77);
   const dispatcher = walk(path.join(packageRoot, "Editor"))
     .filter(file => /^MCPHandlers(?:\.[^.]+)?\.cs$/.test(path.basename(file)))
     .map(file => fs.readFileSync(file, "utf8"))
@@ -158,11 +159,11 @@ function verifyTarball() {
     : execFileSync("npm", npmArguments, commandOptions);
   const result = JSON.parse(output)[0];
   const names = result.files.map(file => file.path.replaceAll("\\", "/"));
-  const allowed = /^(package\.json|README\.md|CHANGELOG\.md|LICENSE\.md|Editor\/|Server~\/|Documentation~\/|Tests\/)/;
+  const allowed = /^(package\.json|README\.md|CHANGELOG\.md|LICENSE\.md|Editor\/|Runtime\/|Server~\/|Documentation~\/|Tests\/)/;
   const forbidden = /(^|\/)(\.agent-memory|\.claude|\.github|Tools~|node_modules|Library|Temp|Logs|obj|cache)(\/|$)|(^|\/)(\.env|\.npmrc|id_rsa|.*\.(pem|pfx|key))$/i;
   assert.deepEqual(names.filter(name => !allowed.test(name)), []);
   assert.deepEqual(names.filter(name => forbidden.test(name)), []);
-  for (const required of ["package.json", "LICENSE.md", "Server~/index.js", "Server~/commands.json", "Server~/package-lock.json", "Editor/AIUnityMCPServer.Editor.asmdef"]) {
+  for (const required of ["package.json", "LICENSE.md", "Server~/index.js", "Server~/commands.json", "Server~/package-lock.json", "Editor/AIUnityMCPServer.Editor.asmdef", "Runtime/AIUnityMCPServer.Runtime.asmdef", "Runtime/ManagedPlayerCompanion.cs"]) {
     assert.ok(names.includes(required), `tarball is missing ${required}`);
   }
 }

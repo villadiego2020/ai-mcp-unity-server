@@ -80,6 +80,9 @@ $packageRoot = Split-Path -Parent $PSScriptRoot
 foreach ($source in Get-ChildItem (Join-Path $packageRoot "Editor") -Recurse -Filter "*.cs" -File | Where-Object { $_.FullName -notlike "*\Editor\TestRunner\*" -and $_.FullName -notlike "*\Editor\NativeMcp\*" }) {
     $arguments += "`"$($source.FullName)`""
 }
+foreach ($source in Get-ChildItem (Join-Path $packageRoot "Runtime") -Recurse -Filter "*.cs" -File) {
+    $arguments += "`"$($source.FullName)`""
+}
 foreach ($source in Get-ChildItem (Join-Path $packageRoot "Tests\Editor") -Recurse -Filter "*.cs" -File) {
     $arguments += "`"$($source.FullName)`""
 }

@@ -3,6 +3,7 @@
   "rootNamespace": "",
   "references": [
     "AIUnityMCPServer.Editor",
+    "AIUnityMCPServer.Runtime",
     "Unity.Pipeline",
     "Unity.Nuget.Newtonsoft-Json",
     "UnityEngine.TestRunner",

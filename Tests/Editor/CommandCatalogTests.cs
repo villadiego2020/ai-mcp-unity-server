@@ -34,8 +34,8 @@ namespace AIUnityMCPServer.Tests
         public void CatalogPublishesAllCommandsWithRequiredFieldsAndTypedSchemas()
         {
             var catalog = MCPCommandCatalog.Load();
-            Assert.That(catalog.Count, Is.EqualTo(73));
-            Assert.That(catalog.Select(item => item.ToolName).Distinct().Count(), Is.EqualTo(73));
+            Assert.That(catalog.Count, Is.EqualTo(77));
+            Assert.That(catalog.Select(item => item.ToolName).Distinct().Count(), Is.EqualTo(77));
             foreach (var command in catalog)
             {
                 Assert.That(command.ToolName.Length, Is.LessThanOrEqualTo(42));

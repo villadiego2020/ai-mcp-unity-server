@@ -85,14 +85,14 @@ test("current README and concise changelog describe the 2.1.0 release", () => {
   assert.ok(currentRelease.split(/\r?\n/).length <= 35, "the current release notes should stay concise");
 });
 
-test("official Unity Pipeline exposes two adapters over all 73 dispatcher routes", () => {
+test("official Unity Pipeline exposes two adapters over all 77 dispatcher routes", () => {
   const pipeline = read("Editor/MCPHandlers.Pipeline.cs");
   const manifest = readJson("Server~/commands.json");
   const names = [...pipeline.matchAll(/\[CliCommand\(\s*"([^"]+)"/g)].map(match => match[1]);
 
   assert.deepEqual(names, ["ai_mcp_list_commands", "ai_mcp_dispatch"]);
-  assert.equal(manifest.commands.length, 73);
-  assert.equal(new Set(manifest.commands.map(command => command.path)).size, 73);
+  assert.equal(manifest.commands.length, 77);
+  assert.equal(new Set(manifest.commands.map(command => command.path)).size, 77);
   assert.match(pipeline, /DispatchFrom\("Pipeline", command\.Trim\(\), request\.ToString\(Formatting\.None\)\)/);
   assert.match(pipeline, /writeCommandsAllowed/);
 });

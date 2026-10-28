@@ -44,7 +44,7 @@ namespace AIUnityMCPServer.Tests
             string json = File.ReadAllText(MCPPackagePaths.CommandManifestPath());
             var manifest = JsonUtility.FromJson<CommandManifest>(json);
             Assert.That(manifest, Is.Not.Null);
-            Assert.That(manifest.commands, Has.Length.EqualTo(73));
+            Assert.That(manifest.commands, Has.Length.EqualTo(77));
 
             var tools = new HashSet<string>(StringComparer.Ordinal);
             var routes = new HashSet<string>(StringComparer.Ordinal);
